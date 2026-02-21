@@ -1,6 +1,12 @@
-# AcctCore
+<img src="bookish-octo-logo.svg" alt="Bookish Octo Logo" align="right" width="240" />
+
+# Bookish Octo
+
+Author: Karl Wehden
 
 Open-source accounting core for federated, multi-entity operations across multichannel businesses (online retail, in-person POS, ticketing, reservations, discounts, and promotions).
+
+Core features include canonical event ingestion, deterministic idempotent posting with immutable journals, policy-driven controls (SoD and break-glass governance), settlement ingest and reconciliation routing, and operational gate packs for auditability and scale-readiness.
 
 Current pilot focus:
 - Industry: ski resorts
@@ -9,9 +15,11 @@ Current pilot focus:
 - Finance UI adapters: ERPNext first, Odoo-compatible contract
 - Payment partner (initial): Stripe, with pluggable gateway design
 
+<br clear="right" />
+
 ## Scope and Goals
 
-AcctCore is designed to provide:
+Bookish Octo is designed to provide:
 - Canonical event ingestion from operational systems
 - Deterministic, idempotent journal posting
 - Immutable auditability and controls-first operation
