@@ -1,6 +1,12 @@
+![Bookish Octo Logo](bookish-octo-logo.svg)
+
 # AcctCore
 
+Author: Karl Wehden
+
 Open-source accounting core for federated, multi-entity operations across multichannel businesses (online retail, in-person POS, ticketing, reservations, discounts, and promotions).
+
+Core features include canonical event ingestion, deterministic idempotent posting with immutable journals, policy-driven controls (SoD and break-glass governance), settlement ingest and reconciliation routing, and operational gate packs for auditability and scale-readiness.
 
 Current pilot focus:
 - Industry: ski resorts
