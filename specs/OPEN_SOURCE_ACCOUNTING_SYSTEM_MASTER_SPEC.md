@@ -291,9 +291,9 @@ Exit criteria:
 - Debezium: https://github.com/debezium/debezium
 - Apache Superset: https://github.com/apache/superset
 
-## 13. Decisions Needed from Program Sponsors
-1. Primary accounting basis at launch: US GAAP-only or dual-book with IFRS.
-2. ERP base: Odoo CE vs ERPNext for operational finance UI.
-3. First pilot segment: ski, golf, or event centers.
-4. Initial countries and legal entities for pilot rollout.
-5. Payment gateway sequence (Stripe-first assumed unless overridden).
+## 13. Confirmed Program Sponsor Decisions
+1. Primary accounting basis at launch: dual-book (`US_GAAP` + `IFRS`) from MVP.
+2. ERP base: ERPNext for operational finance UI, with Odoo-compatible adapter contract.
+3. First pilot segment: ski resorts.
+4. Initial countries: United States and Canada.
+5. Payment gateway sequence: Stripe first, with configurable provider abstraction for others.
