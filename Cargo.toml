@@ -4,6 +4,7 @@ members = [
   "crates/ledger-posting",
   "crates/connector-sdk",
   "crates/reconciliation-model",
+  "crates/settlement-ingest",
   "crates/posting-api",
 ]
 resolver = "2"

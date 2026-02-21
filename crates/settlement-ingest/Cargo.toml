@@ -1,0 +1,11 @@
+[package]
+name = "settlement-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+csv = "1"
+serde.workspace = true
+thiserror.workspace = true

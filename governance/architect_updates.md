@@ -17,3 +17,9 @@
 - Controls&Sec: OPA policy tests + access model checks.
 - Data: reconciliation model validators + taxonomy checks.
 - QA/Release: CI gate scripts + evidence checks.
+
+## Update 3
+- Sprint 2 control gates added: non-bypassable SoD checks for posting and mapping/ruleset changes.
+- Break-glass policy constraints defined and enforced: TTL ceiling, active-window checks, and mandatory audit metadata.
+- Gate runner now validates Sprint 2 governance and evidence artifacts before test execution.
+- Sponsor-impact packet created for Architecture, Finance, Controls, and QA co-signoff.

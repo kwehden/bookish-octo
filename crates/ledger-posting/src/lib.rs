@@ -63,6 +63,8 @@ pub enum LedgerError {
     Immutable,
     #[error("journal not found")]
     NotFound,
+    #[error("journal already reversed")]
+    AlreadyReversed,
 }
 
 #[derive(Default)]
@@ -97,6 +99,9 @@ impl InMemoryJournalRepository {
             .journals
             .get_mut(journal_id)
             .ok_or(LedgerError::NotFound)?;
+        if record.header.status == JournalStatus::Reversed {
+            return Err(LedgerError::AlreadyReversed);
+        }
         record.header.status = JournalStatus::Reversed;
         Ok(())
     }
@@ -202,5 +207,32 @@ mod tests {
         let update = repo.update_posted(&journal_id, record);
 
         assert_eq!(update, Err(LedgerError::Immutable));
+    }
+
+    #[test]
+    fn reverse_transitions_posted_to_reversed_once() {
+        let mut repo = InMemoryJournalRepository::default();
+        let record = JournalRecord {
+            header: sample_header(),
+            lines: balanced_lines(),
+        };
+        let journal_id = record.header.journal_id;
+        repo.insert_posted(record).unwrap();
+
+        repo.reverse(&journal_id).unwrap();
+        let status = repo.get(&journal_id).unwrap().header.status.clone();
+        assert_eq!(status, JournalStatus::Reversed);
+
+        let duplicate_reverse = repo.reverse(&journal_id);
+        assert_eq!(duplicate_reverse, Err(LedgerError::AlreadyReversed));
+    }
+
+    #[test]
+    fn reverse_fails_for_missing_journal() {
+        let mut repo = InMemoryJournalRepository::default();
+        let missing = Uuid::new_v4();
+
+        let error = repo.reverse(&missing);
+        assert_eq!(error, Err(LedgerError::NotFound));
     }
 }

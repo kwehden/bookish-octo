@@ -12,6 +12,7 @@ ledger-posting = { path = "../ledger-posting" }
 platform-core = { path = "../platform-core" }
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 

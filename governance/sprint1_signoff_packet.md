@@ -16,3 +16,6 @@
 - Integration contracts: `crates/connector-sdk/src/lib.rs`
 - Reconciliation model: `contracts/reconciliation_model_v0.json`, `contracts/exception_taxonomy_v0.json`
 - QA gate output: `qa/SPRINT1_GATE_REPORT.md`
+
+## Sprint 2 Reference
+- Follow-on signoff packet: `governance/sprint2_signoff_packet.md`
