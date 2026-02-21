@@ -1,0 +1,40 @@
+name: Sprint1 Contract Gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - feat/**
+      - main
+
+jobs:
+  contract-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup OPA
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      - name: Run schema and approval checks
+        run: |
+          python3 scripts/validate_canonical_schema.py
+          python3 scripts/check_contract_freeze.py
+          python3 scripts/check_impact_approvals.py
+
+      - name: Run OPA policy tests
+        run: opa test policies/opa
+
+      - name: Run Rust tests
+        run: cargo test --workspace

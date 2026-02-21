@@ -1,0 +1,29 @@
+{
+  "version": "0.1.0",
+  "entities": [
+    "SettlementFile",
+    "SettlementLine",
+    "PayoutBatch",
+    "BankStatement",
+    "BankStatementLine",
+    "MatchGroup",
+    "MatchResult",
+    "ReconException"
+  ],
+  "required_keys": [
+    "gateway_transaction_id",
+    "payout_batch_id",
+    "amount",
+    "currency",
+    "value_date",
+    "legal_entity_id"
+  ],
+  "outcomes": [
+    "MATCHED_EXACT",
+    "MATCHED_TOLERANCE",
+    "PARTIAL_MATCH",
+    "UNMATCHED",
+    "DUPLICATE",
+    "INVESTIGATE"
+  ]
+}
