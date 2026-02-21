@@ -1,0 +1,218 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 420" width="400" height="420">
+  <defs>
+    <radialGradient id="bodyGrad" cx="40%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#4a6480"/>
+      <stop offset="50%" stop-color="#2d3f52"/>
+      <stop offset="100%" stop-color="#1a2535"/>
+    </radialGradient>
+    <radialGradient id="headGrad" cx="38%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#506a84"/>
+      <stop offset="55%" stop-color="#2d3f52"/>
+      <stop offset="100%" stop-color="#18283a"/>
+    </radialGradient>
+    <radialGradient id="bellyGrad" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#5a7a96"/>
+      <stop offset="100%" stop-color="#3a5068"/>
+    </radialGradient>
+    <radialGradient id="eyeGrad" cx="35%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#d8e8f0"/>
+    </radialGradient>
+    <radialGradient id="pupilGrad" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#3a4a5a"/>
+      <stop offset="100%" stop-color="#0d1520"/>
+    </radialGradient>
+    <radialGradient id="tentacleGrad1" cx="30%" cy="20%" r="70%">
+      <stop offset="0%" stop-color="#4a6480"/>
+      <stop offset="100%" stop-color="#1a2d40"/>
+    </radialGradient>
+    <linearGradient id="bookGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e8603a"/>
+      <stop offset="100%" stop-color="#c0392b"/>
+    </linearGradient>
+    <linearGradient id="bookSpineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a0291e"/>
+      <stop offset="100%" stop-color="#c0392b"/>
+    </linearGradient>
+    <linearGradient id="pageGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fefaf2"/>
+      <stop offset="100%" stop-color="#ede8d8"/>
+    </linearGradient>
+    <radialGradient id="suckGrad" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#5a7a96"/>
+      <stop offset="100%" stop-color="#253545"/>
+    </radialGradient>
+    <filter id="shadow">
+      <feDropShadow dx="3" dy="5" stdDeviation="6" flood-color="#0d1520" flood-opacity="0.5"/>
+    </filter>
+    <filter id="softShadow">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#0d1520" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- ============ BACK TENTACLES ============ -->
+  <path fill="url(#tentacleGrad1)" d="M148,268 Q108,295 92,338 Q85,362 98,367 Q114,371 122,348 Q136,314 162,282 Z"/>
+  <ellipse fill="url(#suckGrad)" cx="100" cy="358" rx="6" ry="5" transform="rotate(-10,100,358)"/>
+  <ellipse fill="url(#suckGrad)" cx="112" cy="336" rx="5" ry="4"/>
+  <ellipse fill="url(#suckGrad)" cx="130" cy="314" rx="4.5" ry="3.5"/>
+  <ellipse fill="#2a3d50" cx="100" cy="358" rx="3" ry="2.5" transform="rotate(-10,100,358)"/>
+  <ellipse fill="#2a3d50" cx="112" cy="336" rx="2.5" ry="2"/>
+  <ellipse fill="#2a3d50" cx="130" cy="314" rx="2.5" ry="2"/>
+
+  <path fill="url(#tentacleGrad1)" d="M138,272 Q98,312 82,358 Q76,380 90,384 Q104,387 110,363 Q122,328 150,288 Z"/>
+  <ellipse fill="url(#suckGrad)" cx="86" cy="374" rx="6" ry="5"/>
+  <ellipse fill="url(#suckGrad)" cx="96" cy="352" rx="5" ry="4"/>
+  <ellipse fill="url(#suckGrad)" cx="116" cy="322" rx="4.5" ry="3.5"/>
+  <ellipse fill="#2a3d50" cx="86" cy="374" rx="3" ry="2.5"/>
+  <ellipse fill="#2a3d50" cx="96" cy="352" rx="2.5" ry="2"/>
+  <ellipse fill="#2a3d50" cx="116" cy="322" rx="2.5" ry="2"/>
+
+  <path fill="url(#tentacleGrad1)" d="M158,258 Q130,278 120,312 Q114,338 126,344 Q140,348 144,324 Q152,298 170,272 Z"/>
+  <ellipse fill="url(#suckGrad)" cx="127" cy="336" rx="5" ry="4"/>
+  <ellipse fill="url(#suckGrad)" cx="136" cy="316" rx="4" ry="3.5"/>
+  <ellipse fill="#2a3d50" cx="127" cy="336" rx="2.5" ry="2"/>
+  <ellipse fill="#2a3d50" cx="136" cy="316" rx="2" ry="1.8"/>
+
+  <path fill="url(#tentacleGrad1)" d="M252,268 Q292,295 308,338 Q315,362 302,367 Q286,371 278,348 Q264,314 238,282 Z"/>
+  <ellipse fill="url(#suckGrad)" cx="300" cy="358" rx="6" ry="5" transform="rotate(10,300,358)"/>
+  <ellipse fill="url(#suckGrad)" cx="288" cy="336" rx="5" ry="4"/>
+  <ellipse fill="url(#suckGrad)" cx="270" cy="314" rx="4.5" ry="3.5"/>
+  <ellipse fill="#2a3d50" cx="300" cy="358" rx="3" ry="2.5" transform="rotate(10,300,358)"/>
+  <ellipse fill="#2a3d50" cx="288" cy="336" rx="2.5" ry="2"/>
+  <ellipse fill="#2a3d50" cx="270" cy="314" rx="2.5" ry="2"/>
+
+  <path fill="url(#tentacleGrad1)" d="M262,272 Q302,312 318,358 Q324,380 310,384 Q296,387 290,363 Q278,328 250,288 Z"/>
+  <ellipse fill="url(#suckGrad)" cx="314" cy="374" rx="6" ry="5"/>
+  <ellipse fill="url(#suckGrad)" cx="304" cy="352" rx="5" ry="4"/>
+  <ellipse fill="url(#suckGrad)" cx="284" cy="322" rx="4.5" ry="3.5"/>
+  <ellipse fill="#2a3d50" cx="314" cy="374" rx="3" ry="2.5"/>
+  <ellipse fill="#2a3d50" cx="304" cy="352" rx="2.5" ry="2"/>
+  <ellipse fill="#2a3d50" cx="284" cy="322" rx="2.5" ry="2"/>
+
+  <path fill="url(#tentacleGrad1)" d="M242,258 Q270,278 280,312 Q286,338 274,344 Q260,348 256,324 Q248,298 230,272 Z"/>
+  <ellipse fill="url(#suckGrad)" cx="273" cy="336" rx="5" ry="4"/>
+  <ellipse fill="url(#suckGrad)" cx="264" cy="316" rx="4" ry="3.5"/>
+  <ellipse fill="#2a3d50" cx="273" cy="336" rx="2.5" ry="2"/>
+  <ellipse fill="#2a3d50" cx="264" cy="316" rx="2" ry="1.8"/>
+
+  <!-- ============ MAIN BODY ============ -->
+  <!-- Drop shadow -->
+  <ellipse fill="#141f2c" cx="204" cy="228" rx="96" ry="98" opacity="0.55"/>
+  <!-- Mantle -->
+  <ellipse fill="url(#bodyGrad)" cx="200" cy="225" rx="93" ry="95" filter="url(#shadow)"/>
+  <!-- Head dome -->
+  <ellipse fill="url(#headGrad)" cx="200" cy="178" rx="88" ry="80"/>
+  <!-- Specular highlights for 3D -->
+  <ellipse fill="white" cx="174" cy="143" rx="34" ry="21" opacity="0.08"/>
+  <ellipse fill="white" cx="170" cy="147" rx="17" ry="10" opacity="0.11"/>
+  <ellipse fill="white" cx="170" cy="210" rx="22" ry="14" opacity="0.06"/>
+  <!-- Belly -->
+  <ellipse fill="url(#bellyGrad)" cx="200" cy="226" rx="68" ry="68"/>
+  <ellipse fill="white" cx="186" cy="210" rx="20" ry="14" opacity="0.07"/>
+
+  <!-- ============ FRONT ARMS ============ -->
+  <path fill="url(#tentacleGrad1)" d="M122,248 Q96,264 86,292 Q80,316 94,320 Q110,324 118,300 Q130,272 150,255 Z" filter="url(#softShadow)"/>
+  <ellipse fill="url(#suckGrad)" cx="90" cy="312" rx="6" ry="5"/>
+  <ellipse fill="url(#suckGrad)" cx="100" cy="292" rx="5.5" ry="4.5"/>
+  <ellipse fill="url(#suckGrad)" cx="116" cy="272" rx="5" ry="4"/>
+  <ellipse fill="#2a3d50" cx="90" cy="312" rx="3" ry="2.5"/>
+  <ellipse fill="#2a3d50" cx="100" cy="292" rx="2.8" ry="2.2"/>
+  <ellipse fill="#2a3d50" cx="116" cy="272" rx="2.5" ry="2"/>
+
+  <path fill="url(#tentacleGrad1)" d="M278,248 Q304,264 314,292 Q320,316 306,320 Q290,324 282,300 Q270,272 250,255 Z" filter="url(#softShadow)"/>
+  <ellipse fill="url(#suckGrad)" cx="310" cy="312" rx="6" ry="5"/>
+  <ellipse fill="url(#suckGrad)" cx="300" cy="292" rx="5.5" ry="4.5"/>
+  <ellipse fill="url(#suckGrad)" cx="284" cy="272" rx="5" ry="4"/>
+  <ellipse fill="#2a3d50" cx="310" cy="312" rx="3" ry="2.5"/>
+  <ellipse fill="#2a3d50" cx="300" cy="292" rx="2.8" ry="2.2"/>
+  <ellipse fill="#2a3d50" cx="284" cy="272" rx="2.5" ry="2"/>
+
+  <!-- ============ EYES ============ -->
+  <!-- Left eye -->
+  <ellipse fill="#0f1c28" cx="172" cy="200" rx="27" ry="28"/>
+  <ellipse fill="url(#eyeGrad)" cx="172" cy="199" rx="23" ry="24"/>
+  <ellipse fill="url(#pupilGrad)" cx="174" cy="201" rx="14" ry="15"/>
+  <ellipse fill="none" stroke="#1e3a52" stroke-width="2" cx="174" cy="201" rx="14" ry="15"/>
+  <ellipse fill="white" cx="180" cy="193" rx="6" ry="5"/>
+  <circle fill="white" cx="167" cy="207" r="2.5" opacity="0.6"/>
+  <ellipse fill="none" stroke="#0f1c28" stroke-width="2.5" cx="172" cy="199" rx="23" ry="24"/>
+
+  <!-- Right eye -->
+  <ellipse fill="#0f1c28" cx="228" cy="200" rx="27" ry="28"/>
+  <ellipse fill="url(#eyeGrad)" cx="228" cy="199" rx="23" ry="24"/>
+  <ellipse fill="url(#pupilGrad)" cx="226" cy="201" rx="14" ry="15"/>
+  <ellipse fill="none" stroke="#1e3a52" stroke-width="2" cx="226" cy="201" rx="14" ry="15"/>
+  <ellipse fill="white" cx="234" cy="193" rx="6" ry="5"/>
+  <circle fill="white" cx="221" cy="207" r="2.5" opacity="0.6"/>
+  <ellipse fill="none" stroke="#0f1c28" stroke-width="2.5" cx="228" cy="199" rx="23" ry="24"/>
+
+  <!-- ============ GLASSES ============ -->
+  <circle fill="#b8d4e8" opacity="0.18" cx="172" cy="199" r="27"/>
+  <circle fill="#b8d4e8" opacity="0.18" cx="228" cy="199" r="27"/>
+  <!-- Left frame -->
+  <circle fill="none" stroke="#d4a840" stroke-width="4.5" cx="172" cy="199" r="27"/>
+  <!-- Right frame -->
+  <circle fill="none" stroke="#d4a840" stroke-width="4.5" cx="228" cy="199" r="27"/>
+  <!-- Frame 3D sheen -->
+  <path d="M152,180 Q162,170 180,174" fill="none" stroke="#f0c84a" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+  <path d="M208,180 Q218,170 236,174" fill="none" stroke="#f0c84a" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+  <!-- Bridge -->
+  <rect x="197" y="195" width="6" height="7" rx="3" fill="#d4a840"/>
+  <rect x="198" y="196" width="4" height="4" rx="2" fill="#f0c84a" opacity="0.5"/>
+  <!-- Temple arms -->
+  <line x1="145" y1="192" x2="126" y2="186" stroke="#d4a840" stroke-width="4" stroke-linecap="round"/>
+  <line x1="255" y1="192" x2="274" y2="186" stroke="#d4a840" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- ============ MOUTH + BLUSH ============ -->
+  <path d="M191,235 Q200,244 209,235" fill="none" stroke="#4a7a9b" stroke-width="2.5" stroke-linecap="round"/>
+  <ellipse fill="#d06858" opacity="0.2" cx="150" cy="222" rx="14" ry="8"/>
+  <ellipse fill="#d06858" opacity="0.2" cx="250" cy="222" rx="14" ry="8"/>
+
+  <!-- ============ BOOK ============ -->
+  <!-- Shadow -->
+  <rect x="147" y="279" width="112" height="76" rx="4" fill="#0d1520" opacity="0.4"/>
+  <!-- Book cover -->
+  <rect x="144" y="272" width="112" height="76" rx="4" fill="url(#bookGrad)"/>
+  <!-- Spine -->
+  <rect x="144" y="272" width="16" height="76" rx="4" fill="url(#bookSpineGrad)"/>
+  <rect x="145" y="272" width="4" height="76" rx="2" fill="white" opacity="0.1"/>
+  <!-- Top edge 3D -->
+  <rect x="144" y="272" width="112" height="5" rx="2" fill="#f07050" opacity="0.8"/>
+  <!-- Bottom edge 3D -->
+  <rect x="144" y="343" width="112" height="5" rx="2" fill="#8a1f14"/>
+  <!-- Pages -->
+  <rect x="160" y="277" width="93" height="66" rx="2" fill="url(#pageGrad)"/>
+  <!-- Page right edge (thickness) -->
+  <rect x="251" y="277" width="5" height="66" rx="1" fill="#c8c0a8"/>
+  <!-- Page top edge -->
+  <rect x="160" y="277" width="93" height="3" rx="1" fill="white" opacity="0.5"/>
+  <!-- Center fold -->
+  <line x1="207" y1="277" x2="207" y2="343" stroke="#ccc8b8" stroke-width="1.5"/>
+  <!-- Fold shadow -->
+  <rect x="205" y="277" width="3" height="66" fill="#b0a890" opacity="0.3"/>
+
+  <!-- LEFT PAGE: accounting lines -->
+  <line x1="168" y1="291" x2="204" y2="291" stroke="#b0a890" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="168" y1="300" x2="204" y2="300" stroke="#b0a890" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="168" y1="309" x2="204" y2="309" stroke="#b0a890" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="168" y1="318" x2="204" y2="318" stroke="#b0a890" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="168" y1="327" x2="200" y2="327" stroke="#b0a890" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="168" y1="336" x2="204" y2="336" stroke="#b0a890" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- RIGHT PAGE: Currency symbols 2x2 grid -->
+  <!-- Dividers -->
+  <line x1="232" y1="282" x2="232" y2="338" stroke="#d8d0c0" stroke-width="1" opacity="0.6"/>
+  <line x1="213" y1="310" x2="252" y2="310" stroke="#d8d0c0" stroke-width="1" opacity="0.6"/>
+  <!-- Euro -->
+  <text x="222" y="303" font-family="Georgia,'Times New Roman',serif" font-size="18" font-weight="bold" fill="#b03020" text-anchor="middle">€</text>
+  <!-- Pound -->
+  <text x="243" y="303" font-family="Georgia,'Times New Roman',serif" font-size="18" font-weight="bold" fill="#b03020" text-anchor="middle">£</text>
+  <!-- Dollar -->
+  <text x="222" y="328" font-family="Georgia,'Times New Roman',serif" font-size="18" font-weight="bold" fill="#b03020" text-anchor="middle">$</text>
+  <!-- Yen -->
+  <text x="243" y="328" font-family="Georgia,'Times New Roman',serif" font-size="18" font-weight="bold" fill="#b03020" text-anchor="middle">¥</text>
+
+  <!-- Book spine title -->
+  <text x="152" y="336" font-family="Georgia,serif" font-size="6.5" font-weight="bold" fill="#fde8d8" text-anchor="middle" transform="rotate(-90,152,310)" letter-spacing="1">BOOKISH OCTO</text>
+
+</svg>
