@@ -14,10 +14,14 @@ period_lock_action if { input.action == "period_lock" }
 policy_change_action if { input.action == "policy_change" }
 mapping_change_action if { input.action == "mapping_change" }
 ruleset_change_action if { input.action == "ruleset_change" }
+estimate_change_action if { input.action == "estimate_change" }
+dispute_approval_action if { input.action == "dispute_approval" }
 
 non_bypassable_sod_action if posting_action
 non_bypassable_sod_action if mapping_change_action
 non_bypassable_sod_action if ruleset_change_action
+non_bypassable_sod_action if estimate_change_action
+non_bypassable_sod_action if dispute_approval_action
 
 critical_action if non_bypassable_sod_action
 critical_action if period_lock_action
@@ -38,10 +42,28 @@ break_glass_audit_fields_present if {
   reason := object.get(bg, "reason", "")
   approved_by := object.get(bg, "approved_by", "")
   audit_ref := object.get(bg, "audit_ref", "")
+  log_entry_id := object.get(bg, "log_entry_id", "")
   ticket_id != ""
   reason != ""
   approved_by != ""
   audit_ref != ""
+  log_entry_id != ""
+}
+
+break_glass_log_timestamps_valid if {
+  bg := object.get(input, "break_glass", {})
+  request_time_ns := object.get(input, "request_time_ns", -1)
+  activated_at_ns := object.get(bg, "activated_at_ns", -1)
+  approved_at_ns := object.get(bg, "approved_at_ns", -1)
+  logged_at_ns := object.get(bg, "logged_at_ns", -1)
+  is_number(request_time_ns)
+  is_number(activated_at_ns)
+  is_number(approved_at_ns)
+  is_number(logged_at_ns)
+  approved_at_ns >= activated_at_ns
+  logged_at_ns >= activated_at_ns
+  approved_at_ns <= request_time_ns
+  logged_at_ns <= request_time_ns
 }
 
 break_glass_ttl_valid if {
@@ -69,6 +91,7 @@ break_glass_active_window if {
 break_glass_compliant if {
   break_glass_requested
   break_glass_audit_fields_present
+  break_glass_log_timestamps_valid
   break_glass_ttl_valid
   break_glass_active_window
 }

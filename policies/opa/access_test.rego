@@ -8,6 +8,9 @@ valid_break_glass := {
   "reason": "Emergency close support",
   "approved_by": "CS-L",
   "audit_ref": "AUD-2026-02-21-01",
+  "log_entry_id": "BGLOG-2026-02-21-01",
+  "approved_at_ns": 1700000100000000000,
+  "logged_at_ns": 1700000200000000000,
   "activated_at_ns": 1700000000000000000,
   "expires_at_ns": 1700007200000000000
 }
@@ -57,10 +60,68 @@ test_deny_sod_ruleset_change if {
   }
 }
 
+# Allowed: approver can execute estimate change in same entity
+test_allow_estimate_change_approver if {
+  allow with input as {
+    "action": "estimate_change",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"}
+  }
+}
+
+# Denied: finance operator cannot perform estimate changes
+test_deny_sod_estimate_change if {
+  not allow with input as {
+    "action": "estimate_change",
+    "subject": {"role": "finance_operator", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"}
+  }
+}
+
+# Allowed: approver can execute dispute approval in same entity
+test_allow_dispute_approval_approver if {
+  allow with input as {
+    "action": "dispute_approval",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"}
+  }
+}
+
+# Denied: finance operator cannot perform dispute approvals
+test_deny_sod_dispute_approval if {
+  not allow with input as {
+    "action": "dispute_approval",
+    "subject": {"role": "finance_operator", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"}
+  }
+}
+
 # Denied: break-glass cannot bypass SoD on posting
 test_deny_break_glass_on_posting if {
   not allow with input as {
     "action": "posting",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"},
+    "request_time_ns": 1700003600000000000,
+    "break_glass": valid_break_glass
+  }
+}
+
+# Denied: break-glass cannot bypass SoD on estimate changes
+test_deny_break_glass_on_estimate_change if {
+  not allow with input as {
+    "action": "estimate_change",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"},
+    "request_time_ns": 1700003600000000000,
+    "break_glass": valid_break_glass
+  }
+}
+
+# Denied: break-glass cannot bypass SoD on dispute approvals
+test_deny_break_glass_on_dispute_approval if {
+  not allow with input as {
+    "action": "dispute_approval",
     "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
     "resource": {"legal_entity_id": "US_CO_01"},
     "request_time_ns": 1700003600000000000,
@@ -92,6 +153,9 @@ test_deny_break_glass_ttl_exceeded if {
       "reason": "Emergency close support",
       "approved_by": "CS-L",
       "audit_ref": "AUD-2026-02-21-02",
+      "log_entry_id": "BGLOG-2026-02-21-02",
+      "approved_at_ns": 1700000100000000000,
+      "logged_at_ns": 1700000200000000000,
       "activated_at_ns": 1700000000000000000,
       "expires_at_ns": 1700018000000000000
     }
@@ -111,6 +175,53 @@ test_deny_break_glass_missing_audit_fields if {
       "reason": "Emergency close support",
       "approved_by": "",
       "audit_ref": "AUD-2026-02-21-03",
+      "log_entry_id": "BGLOG-2026-02-21-03",
+      "approved_at_ns": 1700000100000000000,
+      "logged_at_ns": 1700000200000000000,
+      "activated_at_ns": 1700000000000000000,
+      "expires_at_ns": 1700007200000000000
+    }
+  }
+}
+
+# Denied: break-glass requires immutable log entry id
+test_deny_break_glass_missing_log_entry_id if {
+  not allow with input as {
+    "action": "period_lock",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"},
+    "request_time_ns": 1700003600000000000,
+    "break_glass": {
+      "enabled": true,
+      "ticket_id": "BG-2026-0004",
+      "reason": "Emergency close support",
+      "approved_by": "CS-L",
+      "audit_ref": "AUD-2026-02-21-04",
+      "log_entry_id": "",
+      "approved_at_ns": 1700000100000000000,
+      "logged_at_ns": 1700000200000000000,
+      "activated_at_ns": 1700000000000000000,
+      "expires_at_ns": 1700007200000000000
+    }
+  }
+}
+
+# Denied: break-glass log timestamps must be valid and not exceed request time
+test_deny_break_glass_invalid_log_timestamps if {
+  not allow with input as {
+    "action": "period_lock",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {"legal_entity_id": "US_CO_01"},
+    "request_time_ns": 1700003600000000000,
+    "break_glass": {
+      "enabled": true,
+      "ticket_id": "BG-2026-0005",
+      "reason": "Emergency close support",
+      "approved_by": "CS-L",
+      "audit_ref": "AUD-2026-02-21-05",
+      "log_entry_id": "BGLOG-2026-02-21-05",
+      "approved_at_ns": 1700000100000000000,
+      "logged_at_ns": 1700005600000000000,
       "activated_at_ns": 1700000000000000000,
       "expires_at_ns": 1700007200000000000
     }

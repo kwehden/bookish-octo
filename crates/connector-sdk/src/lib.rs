@@ -6,7 +6,9 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub mod inntopia;
+pub mod square;
 pub use inntopia::InntopiaAdapter;
+pub use square::SquareAdapter;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RawEvent {

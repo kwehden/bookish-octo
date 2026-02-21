@@ -165,6 +165,12 @@ async fn post_event(
         "order.captured.v1",
         "payment.settled.v1",
         "refund.v1",
+        "fee.assessed.v1",
+        "chargeback.created.v1",
+        "payout.cleared.v1",
+        "dispute.opened.v1",
+        "dispute.won.v1",
+        "dispute.lost.v1",
         "inntopia.reservation.captured.v1",
     ]
     .contains(&req.event_type.as_str())
@@ -508,6 +514,30 @@ mod tests {
         })
     }
 
+    fn sprint3_payload(event_type: &str, amount: i64) -> serde_json::Value {
+        json!({
+            "event_type": event_type,
+            "tenant_id": "tenant_1",
+            "legal_entity_id": "US_CO_01",
+            "ledger_book": "US_GAAP",
+            "accounting_date": "2026-02-21",
+            "source_event_id": format!("{event_type}-evt-1"),
+            "posting_run_id": "run_1",
+            "payload": {
+                "amount_minor": amount,
+                "fee_amount_minor": amount,
+                "currency": "USD"
+            },
+            "provenance": {
+                "book_policy_id": "policy_dual_book",
+                "policy_version": "1.0.0",
+                "fx_rate_set_id": "fx_2026_02_21",
+                "ruleset_version": "v1",
+                "workflow_id": "wf_1"
+            }
+        })
+    }
+
     fn post_request(idempotency_key: &str, payload: &serde_json::Value) -> Request<Body> {
         Request::builder()
             .method("POST")
@@ -574,6 +604,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn sprint3_fee_event_posts_with_rule_engine_v1() {
+        let app = router();
+
+        let response = app
+            .oneshot(post_request(
+                "fee-key",
+                &sprint3_payload("fee.assessed.v1", 325),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unsupported_event_type_is_rejected() {
+        let app = router();
+
+        let response = app
+            .oneshot(post_request(
+                "unsupported-key",
+                &sprint3_payload("inventory.adjusted.v1", 100),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = json_body(response).await;
+        assert_eq!(body["error"], json!("unsupported_event_type"));
     }
 
     #[tokio::test]

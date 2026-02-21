@@ -1,6 +1,11 @@
-use chrono::{DateTime, Utc};
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+const DEFAULT_MATCH_TOLERANCE_MINOR: i64 = 100;
+const ONE_HUNDRED_PERCENT_BPS: u32 = 10_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MatchOutcome {
@@ -32,6 +37,99 @@ pub struct ReconRoutingDecision {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconOrder {
+    pub order_id: String,
+    pub payment_id: String,
+    pub payout_id: String,
+    pub currency: String,
+    pub amount_minor: i64,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconPayment {
+    pub payment_id: String,
+    pub order_id: String,
+    pub payout_id: String,
+    pub currency: String,
+    pub amount_minor: i64,
+    pub settled_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconPayout {
+    pub payout_id: String,
+    pub payment_id: String,
+    pub bank_reference: String,
+    pub currency: String,
+    pub amount_minor: i64,
+    pub settled_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconRunInput {
+    pub run_id: String,
+    pub run_started_at: DateTime<Utc>,
+    pub orders: Vec<ReconOrder>,
+    pub payments: Vec<ReconPayment>,
+    pub payouts: Vec<ReconPayout>,
+    pub tolerance_minor: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconMatchRecord {
+    pub order_id: String,
+    pub expected_payment_id: String,
+    pub expected_payout_id: String,
+    pub matched_payment_id: Option<String>,
+    pub matched_payout_id: Option<String>,
+    pub outcome: MatchOutcome,
+    pub reason_code: Option<ReconReasonCode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconExceptionQueueItem {
+    pub exception_id: String,
+    pub order_id: String,
+    pub payment_id: String,
+    pub payout_id: String,
+    pub reason_code: ReconReasonCode,
+    pub owner_queue: String,
+    pub opened_at: DateTime<Utc>,
+    pub sla_due_at: DateTime<Utc>,
+    pub outcome: MatchOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconRunMetrics {
+    pub total_candidates: u32,
+    pub auto_matched: u32,
+    pub non_auto_candidates: u32,
+    pub routed_exceptions: u32,
+    pub auto_match_rate_bps: u32,
+    pub routed_exception_rate_bps: u32,
+}
+
+impl ReconRunMetrics {
+    pub fn auto_match_rate_percent(&self) -> f64 {
+        self.auto_match_rate_bps as f64 / 100.0
+    }
+
+    pub fn routed_exception_rate_percent(&self) -> f64 {
+        self.routed_exception_rate_bps as f64 / 100.0
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconRunResult {
+    pub run_id: String,
+    pub run_started_at: DateTime<Utc>,
+    pub matches: Vec<ReconMatchRecord>,
+    pub exception_queue: Vec<ReconExceptionQueueItem>,
+    pub metrics: ReconRunMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReconException {
     pub exception_id: String,
     pub exception_type: String,
@@ -48,6 +146,167 @@ pub enum ReconValidationError {
     MissingOwner,
     #[error("severity is required")]
     MissingSeverity,
+}
+
+pub fn reconcile_v1(input: &ReconRunInput) -> ReconRunResult {
+    let mut sorted_orders = input.orders.clone();
+    sorted_orders.sort_by(|left, right| left.order_id.cmp(&right.order_id));
+
+    let payment_index = build_payment_index(&input.payments);
+    let payout_index = build_payout_index(&input.payouts);
+    let tolerance_minor = if input.tolerance_minor < 0 {
+        DEFAULT_MATCH_TOLERANCE_MINOR
+    } else {
+        input.tolerance_minor
+    };
+    let normalized_run_id = normalize_run_id(&input.run_id);
+
+    let mut matches = Vec::with_capacity(sorted_orders.len());
+    let mut exception_queue = Vec::new();
+    let mut auto_matched = 0u32;
+    let mut exception_sequence = 1u32;
+
+    for order in &sorted_orders {
+        let mut outcome = MatchOutcome::MatchedExact;
+        let mut reason_code = None;
+        let mut matched_payment = None;
+        let mut matched_payout = None;
+
+        let payment_candidates = payment_index
+            .get(&order.payment_id)
+            .cloned()
+            .unwrap_or_default();
+        match payment_candidates.as_slice() {
+            [] => {
+                outcome = MatchOutcome::Unmatched;
+                reason_code = Some(ReconReasonCode::MissingGatewayReference);
+            }
+            [payment] => {
+                matched_payment = Some(payment.clone());
+            }
+            _ => {
+                outcome = MatchOutcome::Duplicate;
+                reason_code = Some(ReconReasonCode::DuplicateCandidate);
+            }
+        }
+
+        let payout_candidates = payout_index
+            .get(&order.payout_id)
+            .cloned()
+            .unwrap_or_default();
+        if reason_code.is_none() {
+            match payout_candidates.as_slice() {
+                [] => {
+                    outcome = MatchOutcome::Unmatched;
+                    reason_code = Some(ReconReasonCode::MissingBankReference);
+                }
+                [payout] => {
+                    matched_payout = Some(payout.clone());
+                }
+                _ => {
+                    outcome = MatchOutcome::Duplicate;
+                    reason_code = Some(ReconReasonCode::DuplicateCandidate);
+                }
+            }
+        }
+
+        if reason_code.is_none() {
+            let payment = matched_payment
+                .as_ref()
+                .expect("payment must exist when reason_code is none");
+            let payout = matched_payout
+                .as_ref()
+                .expect("payout must exist when reason_code is none");
+            let order_currency = normalize_currency(&order.currency);
+            let payment_currency = normalize_currency(&payment.currency);
+            let payout_currency = normalize_currency(&payout.currency);
+
+            if payment.order_id != order.order_id
+                || payment.payout_id != order.payout_id
+                || payout.payment_id != payment.payment_id
+            {
+                outcome = MatchOutcome::PartialMatch;
+                reason_code = Some(ReconReasonCode::PartialAllocationRequired);
+            } else if order_currency != payment_currency || payment_currency != payout_currency {
+                outcome = MatchOutcome::Unmatched;
+                reason_code = Some(ReconReasonCode::CurrencyMismatch);
+            } else {
+                let delta_order_payment = (order.amount_minor - payment.amount_minor).abs();
+                let delta_payment_payout = (payment.amount_minor - payout.amount_minor).abs();
+
+                if delta_order_payment == 0 && delta_payment_payout == 0 {
+                    outcome = MatchOutcome::MatchedExact;
+                    reason_code = None;
+                } else if delta_order_payment <= tolerance_minor
+                    && delta_payment_payout <= tolerance_minor
+                {
+                    outcome = MatchOutcome::MatchedTolerance;
+                    reason_code = None;
+                } else if delta_order_payment <= tolerance_minor
+                    || delta_payment_payout <= tolerance_minor
+                {
+                    outcome = MatchOutcome::PartialMatch;
+                    reason_code = Some(ReconReasonCode::PartialAllocationRequired);
+                } else {
+                    outcome = MatchOutcome::Unmatched;
+                    reason_code = Some(ReconReasonCode::AmountMismatch);
+                }
+            }
+        }
+
+        if is_auto_match(&outcome) {
+            auto_matched += 1;
+        }
+
+        let reason_for_match = reason_code.clone();
+        matches.push(ReconMatchRecord {
+            order_id: order.order_id.clone(),
+            expected_payment_id: order.payment_id.clone(),
+            expected_payout_id: order.payout_id.clone(),
+            matched_payment_id: matched_payment.as_ref().map(|item| item.payment_id.clone()),
+            matched_payout_id: matched_payout.as_ref().map(|item| item.payout_id.clone()),
+            outcome: outcome.clone(),
+            reason_code: reason_for_match,
+        });
+
+        if let Some(reason_code) = reason_code {
+            let owner_queue = route_owner_queue(reason_code.clone()).to_string();
+            let sla_due_at = input.run_started_at + sla_offset(reason_code.clone());
+            let exception_id = format!("{normalized_run_id}-EX-{exception_sequence:04}");
+            exception_sequence += 1;
+
+            exception_queue.push(ReconExceptionQueueItem {
+                exception_id,
+                order_id: order.order_id.clone(),
+                payment_id: order.payment_id.clone(),
+                payout_id: order.payout_id.clone(),
+                reason_code,
+                owner_queue,
+                opened_at: input.run_started_at,
+                sla_due_at,
+                outcome: outcome.clone(),
+            });
+        }
+    }
+
+    let total_candidates = matches.len() as u32;
+    let non_auto_candidates = total_candidates.saturating_sub(auto_matched);
+    let routed_exceptions = exception_queue.len() as u32;
+
+    ReconRunResult {
+        run_id: input.run_id.clone(),
+        run_started_at: input.run_started_at,
+        matches,
+        exception_queue,
+        metrics: ReconRunMetrics {
+            total_candidates,
+            auto_matched,
+            non_auto_candidates,
+            routed_exceptions,
+            auto_match_rate_bps: ratio_to_bps(auto_matched, total_candidates),
+            routed_exception_rate_bps: ratio_to_bps(routed_exceptions, non_auto_candidates),
+        },
+    }
 }
 
 pub fn validate_exception(input: &ReconException) -> Result<(), ReconValidationError> {
@@ -132,6 +391,85 @@ fn normalize(input: &str) -> String {
         .replace('-', "_")
 }
 
+fn normalize_currency(input: &str) -> String {
+    input.trim().to_ascii_uppercase()
+}
+
+fn normalize_run_id(input: &str) -> String {
+    let normalized = normalize(input);
+    if normalized.is_empty() {
+        "RECON_RUN".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn ratio_to_bps(numerator: u32, denominator: u32) -> u32 {
+    if denominator == 0 {
+        ONE_HUNDRED_PERCENT_BPS
+    } else {
+        ((numerator as u64 * ONE_HUNDRED_PERCENT_BPS as u64) / denominator as u64) as u32
+    }
+}
+
+fn is_auto_match(outcome: &MatchOutcome) -> bool {
+    *outcome == MatchOutcome::MatchedExact || *outcome == MatchOutcome::MatchedTolerance
+}
+
+fn sla_offset(reason_code: ReconReasonCode) -> Duration {
+    match reason_code {
+        ReconReasonCode::HighRiskInvestigate => Duration::hours(2),
+        ReconReasonCode::AmountMismatch => Duration::hours(4),
+        ReconReasonCode::CurrencyMismatch => Duration::hours(4),
+        ReconReasonCode::PartialAllocationRequired => Duration::hours(4),
+        ReconReasonCode::MissingGatewayReference => Duration::hours(8),
+        ReconReasonCode::MissingBankReference => Duration::hours(8),
+        ReconReasonCode::ToleranceMatchReview => Duration::hours(12),
+        ReconReasonCode::DuplicateCandidate => Duration::hours(24),
+        ReconReasonCode::Unclassified => Duration::hours(24),
+    }
+}
+
+fn build_payment_index(payments: &[ReconPayment]) -> BTreeMap<String, Vec<ReconPayment>> {
+    let mut index: BTreeMap<String, Vec<ReconPayment>> = BTreeMap::new();
+    for payment in payments {
+        index
+            .entry(payment.payment_id.clone())
+            .or_default()
+            .push(payment.clone());
+    }
+    for candidates in index.values_mut() {
+        candidates.sort_by(|left, right| {
+            left.order_id
+                .cmp(&right.order_id)
+                .then(left.payout_id.cmp(&right.payout_id))
+                .then(left.amount_minor.cmp(&right.amount_minor))
+                .then(left.currency.cmp(&right.currency))
+        });
+    }
+    index
+}
+
+fn build_payout_index(payouts: &[ReconPayout]) -> BTreeMap<String, Vec<ReconPayout>> {
+    let mut index: BTreeMap<String, Vec<ReconPayout>> = BTreeMap::new();
+    for payout in payouts {
+        index
+            .entry(payout.payout_id.clone())
+            .or_default()
+            .push(payout.clone());
+    }
+    for candidates in index.values_mut() {
+        candidates.sort_by(|left, right| {
+            left.payment_id
+                .cmp(&right.payment_id)
+                .then(left.amount_minor.cmp(&right.amount_minor))
+                .then(left.currency.cmp(&right.currency))
+                .then(left.bank_reference.cmp(&right.bank_reference))
+        });
+    }
+    index
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +545,180 @@ mod tests {
 
         assert_eq!(route.reason_code, ReconReasonCode::Unclassified);
         assert_eq!(route.owner_queue, "RECON_ANALYST");
+    }
+
+    #[test]
+    fn reconcile_v1_is_deterministic_for_seeded_fixture() {
+        let fixture = seeded_fixture();
+        let first = reconcile_v1(&fixture);
+        let second = reconcile_v1(&fixture);
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn reconcile_v1_routes_seeded_mismatches_to_exception_queue() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+
+        assert_eq!(result.exception_queue.len(), 3);
+        assert_eq!(result.metrics.routed_exception_rate_bps, 10_000);
+
+        let currency = result
+            .exception_queue
+            .iter()
+            .find(|item| item.order_id == "O-009")
+            .expect("currency mismatch should be present");
+        assert_eq!(currency.reason_code, ReconReasonCode::CurrencyMismatch);
+        assert_eq!(currency.owner_queue, "PAYMENTS_OPS");
+        assert_eq!(
+            currency.sla_due_at,
+            fixture.run_started_at + Duration::hours(4)
+        );
+
+        let missing_payout = result
+            .exception_queue
+            .iter()
+            .find(|item| item.order_id == "O-010")
+            .expect("missing payout should be present");
+        assert_eq!(
+            missing_payout.reason_code,
+            ReconReasonCode::MissingBankReference
+        );
+        assert_eq!(missing_payout.owner_queue, "TREASURY_OPS");
+        assert_eq!(
+            missing_payout.sla_due_at,
+            fixture.run_started_at + Duration::hours(8)
+        );
+
+        let duplicate = result
+            .exception_queue
+            .iter()
+            .find(|item| item.order_id == "O-011")
+            .expect("duplicate should be present");
+        assert_eq!(duplicate.reason_code, ReconReasonCode::DuplicateCandidate);
+        assert_eq!(duplicate.owner_queue, "DATA_QUALITY");
+        assert_eq!(
+            duplicate.sla_due_at,
+            fixture.run_started_at + Duration::hours(24)
+        );
+    }
+
+    #[test]
+    fn reconcile_v1_fixture_auto_match_rate_meets_gate() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+
+        assert_eq!(result.metrics.total_candidates, 11);
+        assert_eq!(result.metrics.auto_matched, 8);
+        assert!(result.metrics.auto_match_rate_percent() >= 70.0);
+    }
+
+    fn seeded_fixture() -> ReconRunInput {
+        let run_started_at = fixed_ts();
+        ReconRunInput {
+            run_id: "sprint3_fixture".into(),
+            run_started_at,
+            tolerance_minor: DEFAULT_MATCH_TOLERANCE_MINOR,
+            orders: vec![
+                sample_order("O-001", "P-001", "PO-001", "USD", 10_000, run_started_at),
+                sample_order("O-002", "P-002", "PO-002", "USD", 2_500, run_started_at),
+                sample_order("O-003", "P-003", "PO-003", "USD", 3_000, run_started_at),
+                sample_order("O-004", "P-004", "PO-004", "USD", 1_500, run_started_at),
+                sample_order("O-005", "P-005", "PO-005", "USD", 6_000, run_started_at),
+                sample_order("O-006", "P-006", "PO-006", "USD", 4_200, run_started_at),
+                sample_order("O-007", "P-007", "PO-007", "USD", 3_300, run_started_at),
+                sample_order("O-008", "P-008", "PO-008", "USD", 2_000, run_started_at),
+                sample_order("O-009", "P-009", "PO-009", "USD", 5_000, run_started_at),
+                sample_order("O-010", "P-010", "PO-010", "USD", 7_500, run_started_at),
+                sample_order("O-011", "P-011", "PO-011", "USD", 9_000, run_started_at),
+            ],
+            payments: vec![
+                sample_payment("P-001", "O-001", "PO-001", "USD", 10_000, run_started_at),
+                sample_payment("P-002", "O-002", "PO-002", "USD", 2_500, run_started_at),
+                sample_payment("P-003", "O-003", "PO-003", "USD", 3_000, run_started_at),
+                sample_payment("P-004", "O-004", "PO-004", "USD", 1_500, run_started_at),
+                sample_payment("P-005", "O-005", "PO-005", "USD", 6_000, run_started_at),
+                sample_payment("P-006", "O-006", "PO-006", "USD", 4_200, run_started_at),
+                sample_payment("P-007", "O-007", "PO-007", "USD", 3_300, run_started_at),
+                sample_payment("P-008", "O-008", "PO-008", "USD", 2_080, run_started_at),
+                sample_payment("P-009", "O-009", "PO-009", "CAD", 5_000, run_started_at),
+                sample_payment("P-010", "O-010", "PO-010", "USD", 7_500, run_started_at),
+                sample_payment("P-011", "O-011", "PO-011", "USD", 9_000, run_started_at),
+                sample_payment("P-011", "O-011", "PO-011", "USD", 9_000, run_started_at),
+            ],
+            payouts: vec![
+                sample_payout("PO-001", "P-001", "BANK-001", "USD", 10_000, run_started_at),
+                sample_payout("PO-002", "P-002", "BANK-002", "USD", 2_500, run_started_at),
+                sample_payout("PO-003", "P-003", "BANK-003", "USD", 3_000, run_started_at),
+                sample_payout("PO-004", "P-004", "BANK-004", "USD", 1_500, run_started_at),
+                sample_payout("PO-005", "P-005", "BANK-005", "USD", 6_000, run_started_at),
+                sample_payout("PO-006", "P-006", "BANK-006", "USD", 4_200, run_started_at),
+                sample_payout("PO-007", "P-007", "BANK-007", "USD", 3_300, run_started_at),
+                sample_payout("PO-008", "P-008", "BANK-008", "USD", 2_080, run_started_at),
+                sample_payout("PO-009", "P-009", "BANK-009", "CAD", 5_000, run_started_at),
+                sample_payout("PO-011", "P-011", "BANK-011", "USD", 9_000, run_started_at),
+            ],
+        }
+    }
+
+    fn sample_order(
+        order_id: &str,
+        payment_id: &str,
+        payout_id: &str,
+        currency: &str,
+        amount_minor: i64,
+        at: DateTime<Utc>,
+    ) -> ReconOrder {
+        ReconOrder {
+            order_id: order_id.into(),
+            payment_id: payment_id.into(),
+            payout_id: payout_id.into(),
+            currency: currency.into(),
+            amount_minor,
+            captured_at: at,
+        }
+    }
+
+    fn sample_payment(
+        payment_id: &str,
+        order_id: &str,
+        payout_id: &str,
+        currency: &str,
+        amount_minor: i64,
+        at: DateTime<Utc>,
+    ) -> ReconPayment {
+        ReconPayment {
+            payment_id: payment_id.into(),
+            order_id: order_id.into(),
+            payout_id: payout_id.into(),
+            currency: currency.into(),
+            amount_minor,
+            settled_at: at,
+        }
+    }
+
+    fn sample_payout(
+        payout_id: &str,
+        payment_id: &str,
+        bank_reference: &str,
+        currency: &str,
+        amount_minor: i64,
+        at: DateTime<Utc>,
+    ) -> ReconPayout {
+        ReconPayout {
+            payout_id: payout_id.into(),
+            payment_id: payment_id.into(),
+            bank_reference: bank_reference.into(),
+            currency: currency.into(),
+            amount_minor,
+            settled_at: at,
+        }
+    }
+
+    fn fixed_ts() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-02-21T00:00:00Z")
+            .expect("fixture timestamp must parse")
+            .with_timezone(&Utc)
     }
 }
