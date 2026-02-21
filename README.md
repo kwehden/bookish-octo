@@ -103,4 +103,4 @@ Default endpoint:
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+MIT. See `LICENSE`.
