@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "decisions": [
+    {
+      "id": "DEC-001",
+      "title": "Dual-book atomic posting",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-002",
+      "title": "Posting provenance mandatory fields",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-003",
+      "title": "Outbox/inbox default for cross-service writes",
+      "financial_impact": false,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-004",
+      "title": "Stripe-first with provider-neutral contract",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    }
+  ]
+}

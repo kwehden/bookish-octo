@@ -1,0 +1,20 @@
+[package]
+name = "posting-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+chrono.workspace = true
+hex.workspace = true
+ledger-posting = { path = "../ledger-posting" }
+platform-core = { path = "../platform-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+http = "1"
+tower = { version = "0.5", features = ["util"] }

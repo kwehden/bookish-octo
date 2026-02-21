@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acctcore/contracts/canonical_event_v1.schema.json",
+  "title": "Canonical Event v1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "source_system",
+    "source_event_id",
+    "occurred_at",
+    "business_date",
+    "tenant_id",
+    "legal_entity_id",
+    "idempotency_key",
+    "payload"
+  ],
+  "properties": {
+    "event_id": { "type": "string" },
+    "event_type": {
+      "type": "string",
+      "enum": ["order.captured.v1", "payment.settled.v1", "refund.v1"]
+    },
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "source_system": { "type": "string" },
+    "source_event_id": { "type": "string" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "business_date": { "type": "string", "format": "date" },
+    "tenant_id": { "type": "string" },
+    "legal_entity_id": { "type": "string" },
+    "idempotency_key": { "type": "string" },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}

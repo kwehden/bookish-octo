@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "exception_types": [
+    { "code": "AMOUNT_MISMATCH", "severity": "HIGH", "owner_squad": "Data" },
+    { "code": "MISSING_SETTLEMENT", "severity": "HIGH", "owner_squad": "Integration" },
+    { "code": "LATE_BANK_LINE", "severity": "MEDIUM", "owner_squad": "Data" },
+    { "code": "POLICY_BLOCKED", "severity": "HIGH", "owner_squad": "Controls&Sec" },
+    { "code": "UNKNOWN_PROVIDER_FIELD", "severity": "MEDIUM", "owner_squad": "Integration" }
+  ],
+  "required_fields": [
+    "exception_id",
+    "exception_type",
+    "severity",
+    "opened_at",
+    "owner",
+    "sla_due_at",
+    "resolution_code"
+  ]
+}
