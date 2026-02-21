@@ -1,6 +1,6 @@
 <img src="bookish-octo-logo.svg" alt="Bookish Octo Logo" align="right" width="240" />
 
-# AcctCore
+# Bookish Octo
 
 Author: Karl Wehden
 
@@ -19,7 +19,7 @@ Current pilot focus:
 
 ## Scope and Goals
 
-AcctCore is designed to provide:
+Bookish Octo is designed to provide:
 - Canonical event ingestion from operational systems
 - Deterministic, idempotent journal posting
 - Immutable auditability and controls-first operation
