@@ -5,11 +5,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+pub mod inntopia;
+pub use inntopia::InntopiaAdapter;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RawEvent {
     pub source_event_id: String,
     pub occurred_at: DateTime<Utc>,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CanonicalTraceContext {
+    pub idempotency_key: String,
+    pub correlation_id: String,
+    pub causation_id: Option<String>,
+    pub traceparent: Option<String>,
+    pub tracestate: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -22,6 +34,7 @@ pub struct CanonicalEvent {
     pub tenant_id: String,
     pub legal_entity_id: String,
     pub payload: Value,
+    pub trace_context: CanonicalTraceContext,
 }
 
 #[derive(Debug, Error)]
@@ -73,6 +86,13 @@ mod tests {
                 tenant_id: "tenant_1".to_string(),
                 legal_entity_id: "US_CO_01".to_string(),
                 payload: raw.payload,
+                trace_context: CanonicalTraceContext {
+                    idempotency_key: "fake:evt_1".to_string(),
+                    correlation_id: "corr_1".to_string(),
+                    causation_id: None,
+                    traceparent: None,
+                    tracestate: None,
+                },
             })
         }
     }
