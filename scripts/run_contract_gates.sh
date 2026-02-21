@@ -24,14 +24,20 @@ python3 scripts/check_impact_approvals.py
 
 require_file "governance/sprint2_signoff_packet.md"
 require_file "governance/sprint3_signoff_packet.md"
+require_file "governance/sprint4_signoff_packet.md"
 require_file "governance/SPRINT3_PLAN_COMPLETION_REPORT.md"
+require_file "governance/SPRINT4_PLAN_COMPLETION_REPORT.md"
 require_heading "governance/architect_updates.md" "## Update 3"
 require_heading "governance/architect_updates.md" "## Update 4"
+require_heading "governance/architect_updates.md" "## Update 5"
 require_heading "finance/US_CA_FINANCE_EVIDENCE_CHECKLIST_V1.md" "## Sprint 2"
 require_heading "finance/US_CA_FINANCE_EVIDENCE_CHECKLIST_V1.md" "## Sprint 3 Checklist"
+require_heading "finance/US_CA_FINANCE_EVIDENCE_CHECKLIST_V1.md" "## Sprint 4 Checklist"
 require_heading "controls/CONTROL_GATES_REGISTER_V1.md" "## Sprint 2 Status"
 require_heading "controls/CONTROL_GATES_REGISTER_V1.md" "## Sprint 3 Status"
+require_heading "controls/CONTROL_GATES_REGISTER_V1.md" "## Sprint 4 Status"
 require_heading "governance/SPRINT3_PLAN_COMPLETION_REPORT.md" "## Quantitative Completion Rubric"
+require_heading "governance/SPRINT4_PLAN_COMPLETION_REPORT.md" "## Quantitative Completion Rubric"
 
 opa test policies/opa
 cargo test --workspace

@@ -41,6 +41,9 @@ pub fn derive_lines_v1(
         "dispute.won.v1" => dispute_won(payload),
         "dispute.lost.v1" => dispute_lost(payload),
         "inntopia.reservation.captured.v1" => inntopia_reservation_captured(payload),
+        "intercompany.due_to_due_from.v1" => intercompany_due_to_due_from(payload),
+        "consolidation.elimination.v1" => consolidation_elimination(payload),
+        "fx.translation.v1" => fx_translation(payload),
         unsupported => Err(RuleEngineError::UnsupportedEventType(
             unsupported.to_string(),
         )),
@@ -373,6 +376,135 @@ fn inntopia_reservation_captured(
     ])
 }
 
+fn intercompany_due_to_due_from(
+    payload: &Value,
+) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/amount_minor", "/due_to_due_from_amount_minor"],
+        "amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    let due_from_account = first_string(payload, &["/due_from_account_id"])
+        .unwrap_or_else(|| "1305-DUE-FROM-AFFILIATES".to_string());
+    let due_to_account = first_string(payload, &["/due_to_account_id"])
+        .unwrap_or_else(|| "2305-DUE-TO-AFFILIATES".to_string());
+
+    Ok(vec![
+        line(
+            &due_from_account,
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            &due_to_account,
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn consolidation_elimination(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/amount_minor", "/elimination_amount_minor"],
+        "amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    let debit_account = first_string(payload, &["/elimination_debit_account_id"])
+        .unwrap_or_else(|| "4999-INTERCOMPANY-ELIMINATION".to_string());
+    let credit_account = first_string(payload, &["/elimination_credit_account_id"])
+        .unwrap_or_else(|| "5999-INTERCOMPANY-ELIMINATION".to_string());
+
+    Ok(vec![
+        line(
+            &debit_account,
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            &credit_account,
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn fx_translation(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let translation_amount = optional_i64(
+        payload,
+        &[
+            "/translation_amount_minor",
+            "/fx_translation_amount_minor",
+            "/amount_minor",
+        ],
+    )
+    .ok_or(RuleEngineError::MissingField("translation_amount_minor"))?;
+    if translation_amount == 0 {
+        return Err(RuleEngineError::InvalidNumber("translation_amount_minor"));
+    }
+
+    let amount = translation_amount.abs();
+    let currency = first_string(payload, &["/base_currency", "/currency"])
+        .unwrap_or_else(|| "USD".to_string());
+
+    if translation_amount > 0 {
+        Ok(vec![
+            line(
+                "3100-CUMULATIVE-TRANSLATION-ADJUSTMENT",
+                EntrySide::Debit,
+                amount,
+                &currency,
+                amount,
+                &currency,
+            ),
+            line(
+                "7300-FX-TRANSLATION-GAIN-LOSS",
+                EntrySide::Credit,
+                amount,
+                &currency,
+                amount,
+                &currency,
+            ),
+        ])
+    } else {
+        Ok(vec![
+            line(
+                "7300-FX-TRANSLATION-GAIN-LOSS",
+                EntrySide::Debit,
+                amount,
+                &currency,
+                amount,
+                &currency,
+            ),
+            line(
+                "3100-CUMULATIVE-TRANSLATION-ADJUSTMENT",
+                EntrySide::Credit,
+                amount,
+                &currency,
+                amount,
+                &currency,
+            ),
+        ])
+    }
+}
+
 fn line(
     account_id: &str,
     entry_side: EntrySide,
@@ -585,6 +717,61 @@ mod tests {
     fn dispute_opened_requires_positive_amount() {
         let error = derive_lines_v1("dispute.opened.v1", &json!({"amount_minor": 0})).unwrap_err();
         assert_eq!(error, RuleEngineError::InvalidNumber("amount_minor"));
+    }
+
+    #[test]
+    fn intercompany_due_to_due_from_maps_to_intercompany_accounts() {
+        let lines = derive_lines_v1(
+            "intercompany.due_to_due_from.v1",
+            &json!({"amount_minor": 15000, "currency": "USD"}),
+        )
+        .unwrap();
+
+        assert_eq!(lines.len(), 2);
+        assert_balanced(&lines);
+        assert_eq!(lines[0].account_id, "1305-DUE-FROM-AFFILIATES");
+        assert_eq!(lines[1].account_id, "2305-DUE-TO-AFFILIATES");
+    }
+
+    #[test]
+    fn consolidation_elimination_maps_to_elimination_accounts() {
+        let lines = derive_lines_v1(
+            "consolidation.elimination.v1",
+            &json!({"elimination_amount_minor": 7750, "currency": "USD"}),
+        )
+        .unwrap();
+
+        assert_eq!(lines.len(), 2);
+        assert_balanced(&lines);
+        assert_eq!(lines[0].account_id, "4999-INTERCOMPANY-ELIMINATION");
+        assert_eq!(lines[1].account_id, "5999-INTERCOMPANY-ELIMINATION");
+    }
+
+    #[test]
+    fn fx_translation_positive_and_negative_both_balance() {
+        let positive = derive_lines_v1(
+            "fx.translation.v1",
+            &json!({"translation_amount_minor": 1234, "base_currency": "USD"}),
+        )
+        .unwrap();
+        assert_balanced(&positive);
+        assert_eq!(
+            positive[0].account_id,
+            "3100-CUMULATIVE-TRANSLATION-ADJUSTMENT"
+        );
+        assert_eq!(positive[1].account_id, "7300-FX-TRANSLATION-GAIN-LOSS");
+
+        let negative = derive_lines_v1(
+            "fx.translation.v1",
+            &json!({"translation_amount_minor": -1234, "base_currency": "USD"}),
+        )
+        .unwrap();
+        assert_balanced(&negative);
+        assert_eq!(negative[0].account_id, "7300-FX-TRANSLATION-GAIN-LOSS");
+        assert_eq!(
+            negative[1].account_id,
+            "3100-CUMULATIVE-TRANSLATION-ADJUSTMENT"
+        );
     }
 
     fn assert_balanced(lines: &[DerivedPostingLine]) {
