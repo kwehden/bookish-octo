@@ -34,6 +34,12 @@ pub fn derive_lines_v1(
         "order.captured.v1" => order_captured(payload),
         "payment.settled.v1" => payment_settled(payload),
         "refund.v1" => refund(payload),
+        "fee.assessed.v1" => fee_assessed(payload),
+        "chargeback.created.v1" => chargeback_created(payload),
+        "payout.cleared.v1" => payout_cleared(payload),
+        "dispute.opened.v1" => dispute_opened(payload),
+        "dispute.won.v1" => dispute_won(payload),
+        "dispute.lost.v1" => dispute_lost(payload),
         "inntopia.reservation.captured.v1" => inntopia_reservation_captured(payload),
         unsupported => Err(RuleEngineError::UnsupportedEventType(
             unsupported.to_string(),
@@ -153,6 +159,180 @@ fn refund(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
         ),
         line(
             "1105-CASH-CLEARING",
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn fee_assessed(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/fee_amount_minor", "/amount_minor"],
+        "fee_amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    Ok(vec![
+        line(
+            "6100-PAYMENT-FEES",
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            "1105-CASH-CLEARING",
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn chargeback_created(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/amount_minor", "/chargeback_amount_minor"],
+        "amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    Ok(vec![
+        line(
+            "6150-CHARGEBACK-LOSSES",
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            "1105-CASH-CLEARING",
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn payout_cleared(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/amount_minor", "/net_amount_minor"],
+        "amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    Ok(vec![
+        line(
+            "1010-BANK-OPERATING",
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            "1105-CASH-CLEARING",
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn dispute_opened(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/amount_minor", "/dispute_amount_minor"],
+        "amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    Ok(vec![
+        line(
+            "1205-DISPUTE-RECEIVABLE",
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            "6150-CHARGEBACK-LOSSES",
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn dispute_won(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/amount_minor", "/dispute_amount_minor"],
+        "amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    Ok(vec![
+        line(
+            "1105-CASH-CLEARING",
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            "1205-DISPUTE-RECEIVABLE",
+            EntrySide::Credit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+    ])
+}
+
+fn dispute_lost(payload: &Value) -> Result<Vec<DerivedPostingLine>, RuleEngineError> {
+    let amount = require_positive_i64(
+        payload,
+        &["/amount_minor", "/dispute_amount_minor"],
+        "amount_minor",
+    )?;
+    let currency = first_string(payload, &["/currency"]).unwrap_or_else(|| "USD".to_string());
+    let base_currency = first_string(payload, &["/base_currency"]).unwrap_or(currency.clone());
+
+    Ok(vec![
+        line(
+            "6150-CHARGEBACK-LOSSES",
+            EntrySide::Debit,
+            amount,
+            &currency,
+            amount,
+            &base_currency,
+        ),
+        line(
+            "1205-DISPUTE-RECEIVABLE",
             EntrySide::Credit,
             amount,
             &currency,
@@ -306,6 +486,78 @@ mod tests {
     }
 
     #[test]
+    fn fee_assessed_maps_to_fee_expense_and_cash_clearing() {
+        let lines = derive_lines_v1(
+            "fee.assessed.v1",
+            &json!({"fee_amount_minor": 325, "currency": "USD"}),
+        )
+        .unwrap();
+
+        assert_eq!(lines.len(), 2);
+        assert_balanced(&lines);
+        assert_eq!(lines[0].account_id, "6100-PAYMENT-FEES");
+        assert_eq!(lines[1].account_id, "1105-CASH-CLEARING");
+    }
+
+    #[test]
+    fn chargeback_created_maps_to_losses_and_clearing() {
+        let lines = derive_lines_v1(
+            "chargeback.created.v1",
+            &json!({"chargeback_amount_minor": 10000, "currency": "USD"}),
+        )
+        .unwrap();
+
+        assert_eq!(lines.len(), 2);
+        assert_balanced(&lines);
+        assert_eq!(lines[0].account_id, "6150-CHARGEBACK-LOSSES");
+        assert_eq!(lines[1].account_id, "1105-CASH-CLEARING");
+    }
+
+    #[test]
+    fn payout_cleared_maps_to_bank_and_clearing() {
+        let lines = derive_lines_v1(
+            "payout.cleared.v1",
+            &json!({"amount_minor": 9750, "currency": "USD"}),
+        )
+        .unwrap();
+
+        assert_eq!(lines.len(), 2);
+        assert_balanced(&lines);
+        assert_eq!(lines[0].account_id, "1010-BANK-OPERATING");
+        assert_eq!(lines[1].account_id, "1105-CASH-CLEARING");
+    }
+
+    #[test]
+    fn dispute_lifecycle_states_map_with_balanced_lines() {
+        let opened = derive_lines_v1(
+            "dispute.opened.v1",
+            &json!({"amount_minor": 5000, "currency": "USD"}),
+        )
+        .unwrap();
+        assert_balanced(&opened);
+        assert_eq!(opened[0].account_id, "1205-DISPUTE-RECEIVABLE");
+        assert_eq!(opened[1].account_id, "6150-CHARGEBACK-LOSSES");
+
+        let won = derive_lines_v1(
+            "dispute.won.v1",
+            &json!({"amount_minor": 5000, "currency": "USD"}),
+        )
+        .unwrap();
+        assert_balanced(&won);
+        assert_eq!(won[0].account_id, "1105-CASH-CLEARING");
+        assert_eq!(won[1].account_id, "1205-DISPUTE-RECEIVABLE");
+
+        let lost = derive_lines_v1(
+            "dispute.lost.v1",
+            &json!({"amount_minor": 5000, "currency": "USD"}),
+        )
+        .unwrap();
+        assert_balanced(&lost);
+        assert_eq!(lost[0].account_id, "6150-CHARGEBACK-LOSSES");
+        assert_eq!(lost[1].account_id, "1205-DISPUTE-RECEIVABLE");
+    }
+
+    #[test]
     fn unsupported_type_is_rejected() {
         let error = derive_lines_v1("unknown.event.v1", &json!({})).unwrap_err();
         assert_eq!(
@@ -327,6 +579,12 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, RuleEngineError::InvalidSettlementMath);
+    }
+
+    #[test]
+    fn dispute_opened_requires_positive_amount() {
+        let error = derive_lines_v1("dispute.opened.v1", &json!({"amount_minor": 0})).unwrap_err();
+        assert_eq!(error, RuleEngineError::InvalidNumber("amount_minor"));
     }
 
     fn assert_balanced(lines: &[DerivedPostingLine]) {
