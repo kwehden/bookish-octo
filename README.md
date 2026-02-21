@@ -1,4 +1,4 @@
-![Bookish Octo Logo](bookish-octo-logo.svg)
+<img src="bookish-octo-logo.svg" alt="Bookish Octo Logo" align="right" width="240" />
 
 # AcctCore
 
@@ -14,6 +14,8 @@ Current pilot focus:
 - Finance basis: dual-book (`US_GAAP` + `IFRS`)
 - Finance UI adapters: ERPNext first, Odoo-compatible contract
 - Payment partner (initial): Stripe, with pluggable gateway design
+
+<br clear="right" />
 
 ## Scope and Goals
 
