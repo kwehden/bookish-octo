@@ -448,3 +448,131 @@ test_deny_break_glass_on_master_data_change if {
     "break_glass": valid_break_glass
   }
 }
+
+# Allowed: tamper log seal action for approver with required evidence fields
+test_allow_tamper_log_seal_with_required_fields if {
+  allow with input as {
+    "action": "tamper_log_seal",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "seal_batch_id": "SEAL-2026-02-22-01",
+      "seal_chain_digest": "abcd1234",
+      "evidence_ref": "EVID-SEAL-0001"
+    }
+  }
+}
+
+# Denied: tamper log seal requires evidence metadata
+test_deny_tamper_log_seal_missing_evidence if {
+  not allow with input as {
+    "action": "tamper_log_seal",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "seal_batch_id": "SEAL-2026-02-22-02",
+      "seal_chain_digest": "",
+      "evidence_ref": "EVID-SEAL-0002"
+    }
+  }
+}
+
+# Denied: break-glass cannot bypass SoD on tamper log sealing
+test_deny_break_glass_on_tamper_log_seal if {
+  not allow with input as {
+    "action": "tamper_log_seal",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "seal_batch_id": "SEAL-2026-02-22-03",
+      "seal_chain_digest": "abcd1234",
+      "evidence_ref": "EVID-SEAL-0003"
+    },
+    "request_time_ns": 1700003600000000000,
+    "break_glass": valid_break_glass
+  }
+}
+
+# Allowed: access-review export with required review metadata
+test_allow_access_review_export_with_required_fields if {
+  allow with input as {
+    "action": "access_review_export",
+    "subject": {"role": "finance_approver", "legal_entity_id": "CA_BC_01"},
+    "resource": {
+      "legal_entity_id": "CA_BC_01",
+      "review_period_id": "2026-Q1",
+      "review_owner": "CS-L",
+      "evidence_ref": "EVID-ACCESS-0001"
+    }
+  }
+}
+
+# Denied: access-review export requires evidence metadata
+test_deny_access_review_export_missing_evidence if {
+  not allow with input as {
+    "action": "access_review_export",
+    "subject": {"role": "finance_approver", "legal_entity_id": "CA_BC_01"},
+    "resource": {
+      "legal_entity_id": "CA_BC_01",
+      "review_period_id": "2026-Q1",
+      "review_owner": "",
+      "evidence_ref": "EVID-ACCESS-0002"
+    }
+  }
+}
+
+# Allowed: PCI scope update for approver with ownership metadata
+test_allow_pci_scope_update_with_required_fields if {
+  allow with input as {
+    "action": "pci_scope_update",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "pci_scope_version": "PCI-2026.1",
+      "control_matrix_id": "PCI-MAT-001",
+      "owner_approval_id": "PCI-APPROVAL-001"
+    }
+  }
+}
+
+# Denied: PCI scope update requires approval metadata
+test_deny_pci_scope_update_missing_owner_approval if {
+  not allow with input as {
+    "action": "pci_scope_update",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "pci_scope_version": "PCI-2026.1",
+      "control_matrix_id": "PCI-MAT-001",
+      "owner_approval_id": ""
+    }
+  }
+}
+
+# Allowed: legal hold override for approver with override evidence
+test_allow_legal_hold_override_with_required_fields if {
+  allow with input as {
+    "action": "legal_hold_override",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "hold_id": "LH-2026-0001",
+      "override_ticket_id": "OVR-2026-001",
+      "override_reason": "Controller-approved emergency close"
+    }
+  }
+}
+
+# Denied: finance operator cannot execute legal hold override
+test_deny_legal_hold_override_finance_operator if {
+  not allow with input as {
+    "action": "legal_hold_override",
+    "subject": {"role": "finance_operator", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "hold_id": "LH-2026-0001",
+      "override_ticket_id": "OVR-2026-001",
+      "override_reason": "Controller-approved emergency close"
+    }
+  }
+}

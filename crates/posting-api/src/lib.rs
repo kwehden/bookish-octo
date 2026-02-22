@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -10,7 +10,10 @@ use ledger_posting::{
     EntrySide, InMemoryJournalRepository, JournalHeader, JournalLine, JournalRecord, JournalStatus,
     LedgerError,
 };
-use platform_core::{payload_hash, IdempotencyError, IdempotencyStatus, InMemoryIdempotencyStore};
+use platform_core::{
+    payload_hash, AuditSealError, IdempotencyError, IdempotencyStatus, InMemoryAuditSealStore,
+    InMemoryIdempotencyStore,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -21,6 +24,31 @@ use crate::rule_engine::{derive_lines_v1, RuleEngineError};
 pub mod period;
 pub mod rule_engine;
 
+type ApiError = (StatusCode, serde_json::Value);
+
+#[derive(Debug, Clone)]
+struct LegalHoldRule {
+    hold_id: String,
+    tenant_id: String,
+    legal_entity_id: String,
+    ledger_book: String,
+    start_date: NaiveDate,
+    end_date: Option<NaiveDate>,
+    reason: String,
+    retention_days: u32,
+}
+
+impl LegalHoldRule {
+    fn applies_to(&self, accounting_date: NaiveDate) -> bool {
+        let starts = accounting_date >= self.start_date;
+        let ends = self
+            .end_date
+            .map(|end_date| accounting_date <= end_date)
+            .unwrap_or(true);
+        starts && ends
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     idempotency: InMemoryIdempotencyStore,
@@ -28,6 +56,8 @@ pub struct AppState {
     periods: Arc<Mutex<InMemoryPeriodRepository>>,
     post_results: Arc<Mutex<HashMap<String, CachedPostResult>>>,
     location_allowlist_by_legal_entity: Arc<HashMap<String, HashSet<String>>>,
+    audit_seals: InMemoryAuditSealStore,
+    legal_holds: Arc<Mutex<HashMap<String, LegalHoldRule>>>,
 }
 
 #[derive(Clone)]
@@ -47,6 +77,8 @@ impl Default for AppState {
             periods: Arc::new(Mutex::new(InMemoryPeriodRepository::default())),
             post_results: Arc::new(Mutex::new(HashMap::new())),
             location_allowlist_by_legal_entity: Arc::new(default_location_allowlist()),
+            audit_seals: InMemoryAuditSealStore::default(),
+            legal_holds: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -103,6 +135,83 @@ impl AppState {
         })?;
         Ok(cache.get(key).cloned())
     }
+
+    fn upsert_legal_hold(
+        &self,
+        rule: LegalHoldRule,
+    ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+        let mut holds = self.legal_holds.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "legal_hold_store_error"})),
+            )
+        })?;
+        holds.insert(
+            legal_hold_key(&rule.tenant_id, &rule.legal_entity_id, &rule.ledger_book),
+            rule,
+        );
+        Ok(())
+    }
+
+    fn validate_legal_hold(
+        &self,
+        tenant_id: &str,
+        legal_entity_id: &str,
+        ledger_book: &str,
+        accounting_date: NaiveDate,
+    ) -> Result<(), ApiError> {
+        let holds = self.legal_holds.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error": "legal_hold_store_error"}),
+            )
+        })?;
+        let key = legal_hold_key(tenant_id, legal_entity_id, ledger_book);
+        if let Some(rule) = holds.get(&key) {
+            if rule.applies_to(accounting_date) {
+                return Err((
+                    StatusCode::CONFLICT,
+                    json!({
+                        "error": "legal_hold_active",
+                        "hold_id": rule.hold_id,
+                        "reason": rule.reason,
+                        "retention_days": rule.retention_days,
+                    }),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn append_audit_seal(
+        &self,
+        event_type: &str,
+        entity_scope: &[String],
+        payload: &Value,
+        created_at_ns: i64,
+    ) -> Result<String, ApiError> {
+        self.audit_seals
+            .append(event_type, entity_scope, payload, created_at_ns)
+            .map(|entry| entry.seal)
+            .map_err(|error| match error {
+                AuditSealError::StorePoisoned => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({"error": "audit_seal_store_error"}),
+                ),
+                AuditSealError::ChainBroken { sequence } => (
+                    StatusCode::CONFLICT,
+                    json!({"error": "audit_seal_chain_broken", "sequence": sequence}),
+                ),
+                AuditSealError::Tampered { sequence } => (
+                    StatusCode::CONFLICT,
+                    json!({"error": "audit_seal_tampered", "sequence": sequence}),
+                ),
+            })
+    }
+}
+
+fn legal_hold_key(tenant_id: &str, legal_entity_id: &str, ledger_book: &str) -> String {
+    format!("{tenant_id}::{legal_entity_id}::{ledger_book}")
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -168,6 +277,81 @@ pub struct LockPeriodResponse {
     pub status: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UpsertLegalHoldRequest {
+    pub hold_id: String,
+    pub tenant_id: String,
+    pub legal_entity_id: String,
+    pub ledger_book: String,
+    pub start_date: String,
+    #[serde(default)]
+    pub end_date: Option<String>,
+    pub reason: String,
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct UpsertLegalHoldResponse {
+    pub hold_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AdjustJournalRequest {
+    pub tenant_id: String,
+    pub legal_entity_id: String,
+    pub ledger_book: String,
+    pub accounting_date: String,
+    pub source_event_id: String,
+    pub posting_run_id: String,
+    pub reason_code: String,
+    #[serde(default)]
+    pub location_id: Option<String>,
+    pub lines: Vec<PostLine>,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AdjustJournalResponse {
+    pub reversed_journal_id: String,
+    pub replacement_journal_id: String,
+    pub status: String,
+    pub audit_seal: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevRecQuery {
+    pub book: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RevRecRollforwardResponse {
+    pub book: String,
+    pub journal_count: u32,
+    pub recognized_revenue_minor: i64,
+    pub deferred_revenue_ending_minor: i64,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RevRecDisclosureResponse {
+    pub book: String,
+    pub journal_count: u32,
+    pub refund_contra_revenue_minor: i64,
+    pub policy_versions: Vec<String>,
+    pub fx_rate_sets: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct AuditSealVerifyResponse {
+    pub status: String,
+    pub entries: usize,
+}
+
+fn default_retention_days() -> u32 {
+    2555
+}
+
 pub fn router() -> Router {
     router_with_state(AppState::default())
 }
@@ -176,19 +360,31 @@ pub fn router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/v1/posting/events", post(post_event))
         .route(
+            "/v1/compliance/legal-holds",
+            post(upsert_legal_hold_endpoint),
+        )
+        .route(
+            "/v1/compliance/audit-seals/verify",
+            get(verify_audit_seals_endpoint),
+        )
+        .route(
             "/v1/ledger/journals/:journal_id/reverse",
             post(reverse_journal),
+        )
+        .route(
+            "/v1/ledger/journals/:journal_id/adjust",
+            post(adjust_journal),
         )
         .route(
             "/v1/ledger/periods/:period_id/lock",
             post(lock_period_endpoint),
         )
+        .route("/v1/revrec/rollforward", get(get_revrec_rollforward))
+        .route("/v1/revrec/disclosures", get(get_revrec_disclosures))
         .route("/v1/ops/slo", get(get_slo))
         .route("/v1/ops/capacity", get(get_capacity))
         .with_state(state)
 }
-
-type ApiError = (StatusCode, serde_json::Value);
 
 async fn post_event(
     State(state): State<AppState>,
@@ -287,6 +483,338 @@ async fn post_event(
     }
 }
 
+async fn upsert_legal_hold_endpoint(
+    State(state): State<AppState>,
+    Json(req): Json<UpsertLegalHoldRequest>,
+) -> Result<Json<UpsertLegalHoldResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let start_date = NaiveDate::parse_from_str(&req.start_date, "%Y-%m-%d").map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid_start_date"})),
+        )
+    })?;
+    let end_date = req
+        .end_date
+        .as_deref()
+        .map(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d"))
+        .transpose()
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_end_date"})),
+            )
+        })?;
+    if let Some(value) = end_date.as_ref() {
+        if *value < start_date {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_legal_hold_range"})),
+            ));
+        }
+    }
+
+    let hold_id = req.hold_id.clone();
+    let rule = LegalHoldRule {
+        hold_id: req.hold_id,
+        tenant_id: req.tenant_id,
+        legal_entity_id: req.legal_entity_id,
+        ledger_book: req.ledger_book,
+        start_date,
+        end_date,
+        reason: req.reason,
+        retention_days: req.retention_days,
+    };
+    state.upsert_legal_hold(rule)?;
+
+    Ok(Json(UpsertLegalHoldResponse {
+        hold_id,
+        status: "ACTIVE".to_string(),
+    }))
+}
+
+async fn verify_audit_seals_endpoint(
+    State(state): State<AppState>,
+) -> Result<Json<AuditSealVerifyResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .audit_seals
+        .verify_chain()
+        .map_err(|error| match error {
+            AuditSealError::StorePoisoned => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "audit_seal_store_error"})),
+            ),
+            AuditSealError::ChainBroken { sequence } => (
+                StatusCode::CONFLICT,
+                Json(json!({"error": "audit_seal_chain_broken", "sequence": sequence})),
+            ),
+            AuditSealError::Tampered { sequence } => (
+                StatusCode::CONFLICT,
+                Json(json!({"error": "audit_seal_tampered", "sequence": sequence})),
+            ),
+        })?;
+    let entries = state.audit_seals.len().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "audit_seal_store_error"})),
+        )
+    })?;
+    Ok(Json(AuditSealVerifyResponse {
+        status: "VERIFIED".to_string(),
+        entries,
+    }))
+}
+
+async fn adjust_journal(
+    State(state): State<AppState>,
+    Path(journal_id): Path<String>,
+    Json(req): Json<AdjustJournalRequest>,
+) -> Result<Json<AdjustJournalResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let target_journal_id = Uuid::parse_str(&journal_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid_journal_id"})),
+        )
+    })?;
+    if req.lines.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing_adjustment_lines"})),
+        ));
+    }
+    let accounting_date =
+        NaiveDate::parse_from_str(&req.accounting_date, "%Y-%m-%d").map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_accounting_date"})),
+            )
+        })?;
+    if let Some(location_id) = req.location_id.as_deref() {
+        validate_location_boundary(&state, &req.legal_entity_id, location_id)
+            .map_err(|(status, body)| (status, Json(body)))?;
+    }
+    state
+        .validate_legal_hold(
+            &req.tenant_id,
+            &req.legal_entity_id,
+            &req.ledger_book,
+            accounting_date,
+        )
+        .map_err(|(status, body)| (status, Json(body)))?;
+    {
+        let periods = state.periods.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "period_store_error"})),
+            )
+        })?;
+        periods
+            .ensure_open(
+                &req.tenant_id,
+                &req.legal_entity_id,
+                &req.ledger_book,
+                accounting_date,
+            )
+            .map_err(|error| {
+                let (status, body) = period_error_response(error);
+                (status, Json(body))
+            })?;
+    }
+
+    let lines = derive_lines_from_post_lines(&req.lines).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": error.to_string()})),
+        )
+    })?;
+
+    let replacement_journal_id = deterministic_journal_id(
+        &format!("adjust:{target_journal_id}:{}", req.source_event_id),
+        &payload_hash(&json!({
+            "reason_code": &req.reason_code,
+            "accounting_date": &req.accounting_date,
+            "lines": &req.lines,
+            "posting_run_id": &req.posting_run_id,
+        })),
+    );
+
+    {
+        let mut repo = state.journals.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "journal_store_error"})),
+            )
+        })?;
+        let existing = repo.get(&target_journal_id).cloned().ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "journal_not_found"})),
+            )
+        })?;
+        if existing.header.tenant_id != req.tenant_id
+            || existing.header.legal_entity_id != req.legal_entity_id
+            || existing.header.ledger_book != req.ledger_book
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "adjustment_scope_mismatch"})),
+            ));
+        }
+
+        repo.reverse(&target_journal_id)
+            .map_err(|error| match error {
+                LedgerError::AlreadyReversed => (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": "journal_already_reversed"})),
+                ),
+                LedgerError::NotFound => (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "journal_not_found"})),
+                ),
+                _ => (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": error.to_string()})),
+                ),
+            })?;
+
+        let replacement = JournalRecord {
+            header: JournalHeader {
+                journal_id: replacement_journal_id,
+                journal_number: format!("ADJ-{}", &replacement_journal_id.to_string()[..8]),
+                status: JournalStatus::Posted,
+                tenant_id: req.tenant_id.clone(),
+                legal_entity_id: req.legal_entity_id.clone(),
+                ledger_book: req.ledger_book.clone(),
+                accounting_date,
+                posted_at: chrono::Utc::now(),
+                source_event_ids: vec![
+                    req.source_event_id.clone(),
+                    format!("adjusts:{target_journal_id}"),
+                ],
+                posting_run_id: req.posting_run_id.clone(),
+                book_policy_id: req.provenance.book_policy_id.clone(),
+                policy_version: req.provenance.policy_version.clone(),
+                fx_rate_set_id: req.provenance.fx_rate_set_id.clone(),
+                ruleset_version: req.provenance.ruleset_version.clone(),
+                workflow_id: req.provenance.workflow_id.clone(),
+            },
+            lines,
+        };
+        repo.insert_posted(replacement).map_err(|error| {
+            let (status, body) = ledger_error_response(error);
+            (status, Json(body))
+        })?;
+    }
+
+    let audit_seal = state
+        .append_audit_seal(
+            "journal.adjusted",
+            &[req.legal_entity_id.clone()],
+            &json!({
+                "reversed_journal_id": target_journal_id,
+                "replacement_journal_id": replacement_journal_id,
+                "reason_code": &req.reason_code
+            }),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        )
+        .map_err(|(status, body)| (status, Json(body)))?;
+
+    Ok(Json(AdjustJournalResponse {
+        reversed_journal_id: target_journal_id.to_string(),
+        replacement_journal_id: replacement_journal_id.to_string(),
+        status: "ADJUSTED".to_string(),
+        audit_seal,
+    }))
+}
+
+async fn get_revrec_rollforward(
+    State(state): State<AppState>,
+    Query(query): Query<RevRecQuery>,
+) -> Result<Json<RevRecRollforwardResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let repo = state.journals.lock().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "journal_store_error"})),
+        )
+    })?;
+    let records = repo.all();
+    drop(repo);
+
+    let mut recognized_revenue_minor = 0_i64;
+    let mut deferred_revenue_ending_minor = 0_i64;
+    let mut journal_count = 0_u32;
+    for record in records {
+        if record.header.ledger_book != query.book || record.header.status != JournalStatus::Posted
+        {
+            continue;
+        }
+        journal_count += 1;
+        for line in &record.lines {
+            if line.account_id == "4000-REVENUE" {
+                recognized_revenue_minor +=
+                    signed_amount(line.entry_side.clone(), line.amount_minor);
+            }
+            if line.account_id.contains("DEFERRED") {
+                deferred_revenue_ending_minor +=
+                    signed_amount(line.entry_side.clone(), line.amount_minor);
+            }
+        }
+    }
+
+    Ok(Json(RevRecRollforwardResponse {
+        book: query.book,
+        journal_count,
+        recognized_revenue_minor,
+        deferred_revenue_ending_minor,
+    }))
+}
+
+async fn get_revrec_disclosures(
+    State(state): State<AppState>,
+    Query(query): Query<RevRecQuery>,
+) -> Result<Json<RevRecDisclosureResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let repo = state.journals.lock().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "journal_store_error"})),
+        )
+    })?;
+    let records = repo.all();
+    drop(repo);
+
+    let mut journal_count = 0_u32;
+    let mut refund_contra_revenue_minor = 0_i64;
+    let mut policy_versions = HashSet::new();
+    let mut fx_rate_sets = HashSet::new();
+    for record in records {
+        if record.header.ledger_book != query.book || record.header.status != JournalStatus::Posted
+        {
+            continue;
+        }
+        journal_count += 1;
+        policy_versions.insert(record.header.policy_version.clone());
+        fx_rate_sets.insert(record.header.fx_rate_set_id.clone());
+        for line in &record.lines {
+            if line.account_id == "4050-REFUNDS" {
+                refund_contra_revenue_minor +=
+                    signed_amount(line.entry_side.clone(), line.amount_minor);
+            }
+        }
+    }
+
+    let mut policy_versions = policy_versions.into_iter().collect::<Vec<_>>();
+    policy_versions.sort();
+    let mut fx_rate_sets = fx_rate_sets.into_iter().collect::<Vec<_>>();
+    fx_rate_sets.sort();
+
+    Ok(Json(RevRecDisclosureResponse {
+        book: query.book,
+        journal_count,
+        refund_contra_revenue_minor,
+        policy_versions,
+        fx_rate_sets,
+    }))
+}
+
 fn process_first_seen_post(
     state: &AppState,
     req: PostEventRequest,
@@ -299,6 +827,12 @@ fn process_first_seen_post(
                 json!({"error": "invalid_accounting_date"}),
             )
         })?;
+    state.validate_legal_hold(
+        &req.tenant_id,
+        &req.legal_entity_id,
+        &req.ledger_book,
+        accounting_date,
+    )?;
 
     let location_id = resolve_location_id(&req)?;
     validate_location_boundary(state, &req.legal_entity_id, &location_id)?;
@@ -329,18 +863,18 @@ fn process_first_seen_post(
             journal_id: journal_uuid,
             journal_number: format!("S2-{}", &journal_uuid.to_string()[..8]),
             status: JournalStatus::Posted,
-            tenant_id: req.tenant_id,
-            legal_entity_id: req.legal_entity_id,
-            ledger_book: req.ledger_book,
+            tenant_id: req.tenant_id.clone(),
+            legal_entity_id: req.legal_entity_id.clone(),
+            ledger_book: req.ledger_book.clone(),
             accounting_date,
             posted_at: chrono::Utc::now(),
-            source_event_ids: vec![req.source_event_id],
-            posting_run_id: req.posting_run_id,
-            book_policy_id: req.provenance.book_policy_id,
-            policy_version: req.provenance.policy_version,
-            fx_rate_set_id: req.provenance.fx_rate_set_id,
-            ruleset_version: req.provenance.ruleset_version,
-            workflow_id: req.provenance.workflow_id,
+            source_event_ids: vec![req.source_event_id.clone()],
+            posting_run_id: req.posting_run_id.clone(),
+            book_policy_id: req.provenance.book_policy_id.clone(),
+            policy_version: req.provenance.policy_version.clone(),
+            fx_rate_set_id: req.provenance.fx_rate_set_id.clone(),
+            ruleset_version: req.provenance.ruleset_version.clone(),
+            workflow_id: req.provenance.workflow_id.clone(),
         },
         lines,
     };
@@ -352,6 +886,21 @@ fn process_first_seen_post(
         )
     })?;
     repo.insert_posted(record).map_err(ledger_error_response)?;
+    drop(repo);
+
+    state.append_audit_seal(
+        "posting.posted",
+        &[req.legal_entity_id.clone()],
+        &json!({
+            "event_type": req.event_type,
+            "journal_id": journal_uuid,
+            "tenant_id": req.tenant_id,
+            "ledger_book": req.ledger_book,
+            "source_event_id": req.source_event_id,
+            "location_id": location_id
+        }),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+    )?;
 
     Ok(PostEventResponse {
         journal_id: journal_uuid.to_string(),
@@ -392,6 +941,21 @@ async fn reverse_journal(
             Json(json!({"error": error.to_string()})),
         ),
     })?;
+    let entity_scope = repo
+        .get(&journal_id)
+        .map(|record| vec![record.header.legal_entity_id.clone()])
+        .unwrap_or_default();
+    drop(repo);
+    if !entity_scope.is_empty() {
+        state
+            .append_audit_seal(
+                "journal.reversed",
+                &entity_scope,
+                &json!({"journal_id": journal_id}),
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            )
+            .map_err(|(status, body)| (status, Json(body)))?;
+    }
 
     Ok(Json(ReverseJournalResponse {
         journal_id: journal_id.to_string(),
@@ -566,7 +1130,11 @@ fn derive_journal_lines(req: &PostEventRequest) -> Result<Vec<JournalLine>, Rule
         return Err(RuleEngineError::MissingField("payload"));
     }
 
-    req.lines
+    derive_lines_from_post_lines(&req.lines)
+}
+
+fn derive_lines_from_post_lines(lines: &[PostLine]) -> Result<Vec<JournalLine>, RuleEngineError> {
+    lines
         .iter()
         .enumerate()
         .map(|(index, line)| {
@@ -581,6 +1149,13 @@ fn derive_journal_lines(req: &PostEventRequest) -> Result<Vec<JournalLine>, Rule
             })
         })
         .collect()
+}
+
+fn signed_amount(entry_side: EntrySide, amount_minor: i64) -> i64 {
+    match entry_side {
+        EntrySide::Credit => amount_minor,
+        EntrySide::Debit => -amount_minor,
+    }
 }
 
 fn parse_entry_side(entry_side: &str) -> Result<EntrySide, RuleEngineError> {
@@ -743,6 +1318,44 @@ mod tests {
         })
     }
 
+    fn adjustment_payload(source_event_id: &str, amount: i64) -> serde_json::Value {
+        json!({
+            "tenant_id": "tenant_1",
+            "legal_entity_id": "US_CO_01",
+            "ledger_book": "US_GAAP",
+            "accounting_date": "2026-02-21",
+            "source_event_id": source_event_id,
+            "posting_run_id": "run_adj_1",
+            "reason_code": "MANUAL_TRUE_UP",
+            "location_id": "BRECK_BASE_AREA",
+            "lines": [
+                {
+                    "account_id": "1105-CASH-CLEARING",
+                    "entry_side": "debit",
+                    "amount_minor": amount,
+                    "currency": "USD",
+                    "base_amount_minor": amount,
+                    "base_currency": "USD"
+                },
+                {
+                    "account_id": "4000-REVENUE",
+                    "entry_side": "credit",
+                    "amount_minor": amount,
+                    "currency": "USD",
+                    "base_amount_minor": amount,
+                    "base_currency": "USD"
+                }
+            ],
+            "provenance": {
+                "book_policy_id": "policy_dual_book",
+                "policy_version": "1.0.1",
+                "fx_rate_set_id": "fx_2026_02_21",
+                "ruleset_version": "v1",
+                "workflow_id": "wf_adj_1"
+            }
+        })
+    }
+
     fn post_request(idempotency_key: &str, payload: &serde_json::Value) -> Request<Body> {
         Request::builder()
             .method("POST")
@@ -757,6 +1370,24 @@ mod tests {
         Request::builder()
             .method("POST")
             .uri(format!("/v1/ledger/periods/{period_id}/lock"))
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+    }
+
+    fn legal_hold_request(payload: &serde_json::Value) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/compliance/legal-holds")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+    }
+
+    fn adjust_request(journal_id: &str, payload: &serde_json::Value) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/ledger/journals/{journal_id}/adjust"))
             .header("content-type", "application/json")
             .body(Body::from(payload.to_string()))
             .unwrap()
@@ -1096,6 +1727,158 @@ mod tests {
             .unwrap();
         let second_reverse = app.oneshot(duplicate_reverse).await.unwrap();
         assert_eq!(second_reverse.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn legal_hold_blocks_posting_when_active() {
+        let app = router();
+        let hold_payload = json!({
+            "hold_id": "LH-2026-0001",
+            "tenant_id": "tenant_1",
+            "legal_entity_id": "US_CO_01",
+            "ledger_book": "US_GAAP",
+            "start_date": "2026-02-01",
+            "end_date": "2026-03-01",
+            "reason": "Regulatory audit",
+            "retention_days": 2555
+        });
+
+        let hold_response = app
+            .clone()
+            .oneshot(legal_hold_request(&hold_payload))
+            .await
+            .unwrap();
+        assert_eq!(hold_response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(post_request("held-post-key", &order_payload(10000)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = json_body(response).await;
+        assert_eq!(body["error"], json!("legal_hold_active"));
+        assert_eq!(body["hold_id"], json!("LH-2026-0001"));
+    }
+
+    #[tokio::test]
+    async fn audit_seal_verify_endpoint_reports_entries() {
+        let app = router();
+
+        let post = app
+            .clone()
+            .oneshot(post_request("audit-seal-post", &order_payload(10000)))
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::OK);
+
+        let verify = Request::builder()
+            .method("GET")
+            .uri("/v1/compliance/audit-seals/verify")
+            .body(Body::empty())
+            .unwrap();
+        let verify_response = app.oneshot(verify).await.unwrap();
+        assert_eq!(verify_response.status(), StatusCode::OK);
+        let body = json_body(verify_response).await;
+        assert_eq!(body["status"], json!("VERIFIED"));
+        assert!(body["entries"].as_u64().unwrap_or_default() >= 1);
+    }
+
+    #[tokio::test]
+    async fn adjustment_endpoint_reverses_original_and_posts_replacement() {
+        let app = router();
+
+        let post = app
+            .clone()
+            .oneshot(post_request("adjust-source-key", &order_payload(10000)))
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::OK);
+        let posted_body = json_body(post).await;
+        let journal_id = posted_body["journal_id"].as_str().unwrap().to_string();
+
+        let adjust_payload = adjustment_payload("adj_evt_1", 9000);
+        let adjust_response = app
+            .clone()
+            .oneshot(adjust_request(&journal_id, &adjust_payload))
+            .await
+            .unwrap();
+        assert_eq!(adjust_response.status(), StatusCode::OK);
+        let adjust_body = json_body(adjust_response).await;
+        assert_eq!(adjust_body["status"], json!("ADJUSTED"));
+        assert_eq!(adjust_body["reversed_journal_id"], json!(journal_id));
+        assert_ne!(
+            adjust_body["replacement_journal_id"],
+            adjust_body["reversed_journal_id"]
+        );
+        assert!(adjust_body["audit_seal"].as_str().unwrap_or_default().len() > 8);
+    }
+
+    #[tokio::test]
+    async fn revrec_rollforward_is_book_scoped() {
+        let app = router();
+        let mut ifrs_payload = order_payload(7000);
+        ifrs_payload["ledger_book"] = json!("IFRS");
+        ifrs_payload["source_event_id"] = json!("evt_ifrs_1");
+
+        let us_post = app
+            .clone()
+            .oneshot(post_request("rollforward-us", &order_payload(10000)))
+            .await
+            .unwrap();
+        assert_eq!(us_post.status(), StatusCode::OK);
+
+        let ifrs_post = app
+            .clone()
+            .oneshot(post_request("rollforward-ifrs", &ifrs_payload))
+            .await
+            .unwrap();
+        assert_eq!(ifrs_post.status(), StatusCode::OK);
+
+        let rollforward = Request::builder()
+            .method("GET")
+            .uri("/v1/revrec/rollforward?book=US_GAAP")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(rollforward).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["book"], json!("US_GAAP"));
+        assert_eq!(body["journal_count"], json!(1));
+        assert_eq!(body["recognized_revenue_minor"], json!(10000));
+    }
+
+    #[tokio::test]
+    async fn revrec_disclosures_include_policy_and_fx_sets() {
+        let app = router();
+        let order = app
+            .clone()
+            .oneshot(post_request("disclosure-order", &order_payload(10000)))
+            .await
+            .unwrap();
+        assert_eq!(order.status(), StatusCode::OK);
+        let refund = app
+            .clone()
+            .oneshot(post_request(
+                "disclosure-refund",
+                &sprint3_payload("refund.v1", 500),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(refund.status(), StatusCode::OK);
+
+        let disclosures = Request::builder()
+            .method("GET")
+            .uri("/v1/revrec/disclosures?book=US_GAAP")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(disclosures).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["book"], json!("US_GAAP"));
+        assert_eq!(body["journal_count"], json!(2));
+        assert_eq!(body["refund_contra_revenue_minor"], json!(-500));
+        assert_eq!(body["policy_versions"], json!(["1.0.0"]));
+        assert_eq!(body["fx_rate_sets"], json!(["fx_2026_02_21"]));
     }
 
     #[tokio::test]

@@ -41,3 +41,17 @@
 - Sprint 4 data baseline completed: entity close-checklist service, blocker-aware dependency transitions, and 2-3 entity dry-run close simulation are implemented with passing tests.
 - Overall Sprint 4 completion score updated to `14/18 (77.8%)` with full gate execution evidence; formal board approvals and stage-level consolidation evidence remain open blockers.
 - Sprint 5 squad execution plan published using the same methodology for next-sprint kickoff.
+
+## Update 7
+- Sprint 5 platform baseline completed: legal-hold policy enforcement, immutable journal adjustment flow, and audit-seal verification endpoint are implemented with passing tests.
+- Sprint 5 integration baseline completed: replay/backfill resiliency harness added with failure-injection recovery telemetry and adapter coverage for Inntopia/Square.
+- Sprint 5 controls/data baseline completed: OPA actions extended for tamper/access/PCI/legal-hold override paths, and reconciliation aging/SLA compliance export implemented with deterministic tests.
+- Overall Sprint 5 completion score is `16/18 (88.9%)`; external business-owner UAT and dedicated performance signoff remain release blockers.
+
+## Major Tool Use Summary (Sprint 5, major activities only)
+- Platform: `cargo test -p platform-core`, `cargo test -p posting-api`, and API regression harnesses for legal-hold/adjustment/rev-rec/audit endpoints.
+- Finance: checklist and decision evidence updates with rollforward/disclosure contract validation.
+- Integration: connector resiliency harness tests (`cargo test -p connector-sdk`) with transient-failure injection.
+- Controls&Sec: `opa test policies/opa`, control artifact validation scripts, and gate-policy updates.
+- Data/Reconciliation: reconciliation metric export tests (`cargo test -p reconciliation-model`) and evidence contract publication.
+- QA/Release: full gate runner validation via `./scripts/run_contract_gates.sh`.

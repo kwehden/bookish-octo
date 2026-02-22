@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -67,6 +67,129 @@ pub fn payload_hash(payload: &Value) -> String {
     hex::encode(hasher.finalize())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditSealEntry {
+    pub sequence: u64,
+    pub event_type: String,
+    pub entity_scope: Vec<String>,
+    pub payload_hash: String,
+    pub previous_seal: String,
+    pub seal: String,
+    pub created_at_ns: i64,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum AuditSealError {
+    #[error("audit seal store poisoned")]
+    StorePoisoned,
+    #[error("audit seal chain broken at sequence {sequence}")]
+    ChainBroken { sequence: u64 },
+    #[error("audit seal tampered at sequence {sequence}")]
+    Tampered { sequence: u64 },
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryAuditSealStore {
+    inner: Arc<Mutex<Vec<AuditSealEntry>>>,
+}
+
+impl InMemoryAuditSealStore {
+    pub fn append(
+        &self,
+        event_type: &str,
+        entity_scope: &[String],
+        payload: &Value,
+        created_at_ns: i64,
+    ) -> Result<AuditSealEntry, AuditSealError> {
+        let mut store = self
+            .inner
+            .lock()
+            .map_err(|_| AuditSealError::StorePoisoned)?;
+        let sequence = (store.len() as u64) + 1;
+        let previous_seal = store
+            .last()
+            .map(|entry| entry.seal.clone())
+            .unwrap_or_else(|| "GENESIS".to_string());
+        let payload_digest = payload_hash(payload);
+        let canonical_scope = canonical_entity_scope(entity_scope);
+        let seal = payload_hash(&json!({
+            "sequence": sequence,
+            "event_type": event_type,
+            "entity_scope": canonical_scope,
+            "payload_hash": payload_digest,
+            "previous_seal": previous_seal,
+            "created_at_ns": created_at_ns
+        }));
+
+        let entry = AuditSealEntry {
+            sequence,
+            event_type: event_type.to_string(),
+            entity_scope: canonical_scope,
+            payload_hash: payload_digest,
+            previous_seal,
+            seal,
+            created_at_ns,
+        };
+        store.push(entry.clone());
+        Ok(entry)
+    }
+
+    pub fn verify_chain(&self) -> Result<(), AuditSealError> {
+        let entries = self
+            .inner
+            .lock()
+            .map_err(|_| AuditSealError::StorePoisoned)?
+            .clone();
+        let mut previous_seal = "GENESIS".to_string();
+
+        for (index, entry) in entries.iter().enumerate() {
+            let expected_sequence = (index + 1) as u64;
+            if entry.sequence != expected_sequence || entry.previous_seal != previous_seal {
+                return Err(AuditSealError::ChainBroken {
+                    sequence: entry.sequence,
+                });
+            }
+
+            let expected_seal = payload_hash(&json!({
+                "sequence": entry.sequence,
+                "event_type": entry.event_type,
+                "entity_scope": canonical_entity_scope(&entry.entity_scope),
+                "payload_hash": entry.payload_hash,
+                "previous_seal": entry.previous_seal,
+                "created_at_ns": entry.created_at_ns
+            }));
+            if expected_seal != entry.seal {
+                return Err(AuditSealError::Tampered {
+                    sequence: entry.sequence,
+                });
+            }
+
+            previous_seal = entry.seal.clone();
+        }
+
+        Ok(())
+    }
+
+    pub fn len(&self) -> Result<usize, AuditSealError> {
+        let store = self
+            .inner
+            .lock()
+            .map_err(|_| AuditSealError::StorePoisoned)?;
+        Ok(store.len())
+    }
+}
+
+fn canonical_entity_scope(entity_scope: &[String]) -> Vec<String> {
+    let mut scope = entity_scope
+        .iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    scope.sort();
+    scope.dedup();
+    scope
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +217,62 @@ mod tests {
         let conflict = store.check_or_insert("key-1", &payload_b).unwrap_err();
 
         assert_eq!(conflict, IdempotencyError::PayloadHashMismatch);
+    }
+
+    #[test]
+    fn audit_seal_chain_verifies_after_append() {
+        let store = InMemoryAuditSealStore::default();
+        let entity_scope = vec!["US_CO_01".to_string()];
+        store
+            .append(
+                "posting.posted",
+                &entity_scope,
+                &json!({"journal_id": "j1"}),
+                1700000000000000000,
+            )
+            .unwrap();
+        store
+            .append(
+                "posting.posted",
+                &entity_scope,
+                &json!({"journal_id": "j2"}),
+                1700000001000000000,
+            )
+            .unwrap();
+
+        assert_eq!(store.len().unwrap(), 2);
+        assert_eq!(store.verify_chain(), Ok(()));
+    }
+
+    #[test]
+    fn audit_seal_detects_payload_tampering() {
+        let store = InMemoryAuditSealStore::default();
+        let entity_scope = vec!["US_CO_01".to_string()];
+        store
+            .append(
+                "posting.posted",
+                &entity_scope,
+                &json!({"journal_id": "j1"}),
+                1700000000000000000,
+            )
+            .unwrap();
+        store
+            .append(
+                "posting.posted",
+                &entity_scope,
+                &json!({"journal_id": "j2"}),
+                1700000001000000000,
+            )
+            .unwrap();
+
+        {
+            let mut guard = store.inner.lock().unwrap();
+            guard[1].payload_hash = "tampered".to_string();
+        }
+
+        assert_eq!(
+            store.verify_chain(),
+            Err(AuditSealError::Tampered { sequence: 2 })
+        );
     }
 }

@@ -86,6 +86,10 @@ impl InMemoryJournalRepository {
         self.journals.get(journal_id)
     }
 
+    pub fn all(&self) -> Vec<JournalRecord> {
+        self.journals.values().cloned().collect()
+    }
+
     pub fn update_posted(
         &mut self,
         _journal_id: &Uuid,

@@ -31,3 +31,11 @@ All gates are release/merge blockers in Sprint 1 when impacted.
 - G3: Policy regression gate - `Expanded` (OPA tests added for intercompany posting approval constraints, close approval constraints, and master-data control paths)
 - G4: Evidence chain gate - `Expanded` (Sprint 4 signoff packet + Sprint 4 completion rubric linked as required evidence)
 - G5: Stage control activation gate - `Expanded` (gate script now enforces Sprint 4 governance artifacts and Sprint 4 section checks)
+
+## Sprint 5 Status
+
+- G1: Entity boundary gate - `Active` (retained with legal-hold and adjustment scope controls enforced in posting paths)
+- G2: SoD baseline gate - `Expanded` (non-bypassable actions now include `tamper_log_seal` and `access_review_export`; `pci_scope_update` and `legal_hold_override` gated as critical actions)
+- G3: Policy regression gate - `Expanded` (OPA suite extended for tamper sealing, access-review, PCI scope updates, and legal-hold override contexts)
+- G4: Evidence chain gate - `Expanded` (tamper-sealing verification, access-review report, and PCI ownership matrix added as required evidence artifacts)
+- G5: Stage control activation gate - `Expanded` (gate script enforces Sprint 5 signoff/completion/QA artifacts and Sprint 5 section checks)

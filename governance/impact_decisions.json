@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "decisions": [
     {
       "id": "DEC-001",
@@ -34,6 +34,46 @@
     {
       "id": "DEC-004",
       "title": "Stripe-first with provider-neutral contract",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-005",
+      "title": "Tamper-evident audit seal verification as release blocker",
+      "financial_impact": false,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-006",
+      "title": "Quarterly access-review export evidence cadence",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-007",
+      "title": "PCI scope/control ownership matrix and approval metadata requirements",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-008",
+      "title": "Legal-hold override governance requires ticketed approvals and evidence",
       "financial_impact": true,
       "control_impact": true,
       "finance_approved": true,

@@ -10,9 +10,13 @@ required_paths = [
     "finance/DUAL_BOOK_POLICY_PACKAGE_V1.md",
     "controls/ACCESS_MODEL_V0.md",
     "controls/CONTROL_GATES_REGISTER_V1.md",
+    "controls/TAMPER_SEALING_VERIFICATION_V1.md",
+    "controls/ACCESS_REVIEW_REPORTING_V1.md",
+    "controls/PCI_SCOPE_CONTROL_OWNERSHIP_MATRIX_V1.md",
     "policies/opa/access.rego",
     "policies/opa/access_test.rego",
     "governance/impact_decisions.json",
+    "specs/SPRINT5_RECON_EVIDENCE_EXPORT.md",
 ]
 
 missing = [p for p in required_paths if not Path(p).exists()]
