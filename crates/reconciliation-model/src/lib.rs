@@ -6,6 +6,8 @@ use thiserror::Error;
 
 const DEFAULT_MATCH_TOLERANCE_MINOR: i64 = 100;
 const ONE_HUNDRED_PERCENT_BPS: u32 = 10_000;
+const MIN_DRY_RUN_ENTITY_COUNT: usize = 2;
+const MAX_DRY_RUN_ENTITY_COUNT: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MatchOutcome {
@@ -146,6 +148,167 @@ pub enum ReconValidationError {
     MissingOwner,
     #[error("severity is required")]
     MissingSeverity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CloseDependencyStatus {
+    Pending,
+    InProgress,
+    Satisfied,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloseChecklistDependency {
+    pub dependency_id: String,
+    pub description: String,
+    pub required_for_close: bool,
+    pub status: CloseDependencyStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CloseChecklistStatus {
+    InProgress,
+    Blocked,
+    ReadyToClose,
+    Closed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EntityCloseChecklist {
+    pub checklist_id: String,
+    pub legal_entity_id: String,
+    pub period_id: String,
+    pub status: CloseChecklistStatus,
+    pub dependencies: Vec<CloseChecklistDependency>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloseChecklistProgression {
+    pub checklist_id: String,
+    pub legal_entity_id: String,
+    pub period_id: String,
+    pub status: CloseChecklistStatus,
+    pub can_progress: bool,
+    pub unresolved_blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloseChecklistActorContext {
+    pub actor_id: String,
+    pub actor_role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultiEntityCloseDryRunInput {
+    pub run_id: String,
+    pub run_started_at: DateTime<Utc>,
+    pub checklists: Vec<EntityCloseChecklist>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EntityCloseDryRunResult {
+    pub checklist_id: String,
+    pub legal_entity_id: String,
+    pub status: CloseChecklistStatus,
+    pub can_progress: bool,
+    pub close_ready: bool,
+    pub unresolved_blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultiEntityCloseDryRunResult {
+    pub run_id: String,
+    pub run_started_at: DateTime<Utc>,
+    pub entity_results: Vec<EntityCloseDryRunResult>,
+    pub passed: bool,
+    pub failed_entities: Vec<String>,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CloseChecklistError {
+    #[error("dependency `{dependency_id}` not found in checklist")]
+    DependencyNotFound { dependency_id: String },
+    #[error("invalid dependency transition from `{from:?}` to `{to:?}`")]
+    InvalidDependencyTransition {
+        from: CloseDependencyStatus,
+        to: CloseDependencyStatus,
+    },
+    #[error("multi-entity close dry run requires 2-3 entities, got {entity_count}")]
+    UnsupportedEntityCount { entity_count: usize },
+}
+
+pub fn evaluate_entity_close_checklist(
+    checklist: &EntityCloseChecklist,
+) -> CloseChecklistProgression {
+    let unresolved_blockers = checklist
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.status == CloseDependencyStatus::Blocked)
+        .map(|dependency| dependency.dependency_id.clone())
+        .collect::<Vec<_>>();
+    let can_progress = unresolved_blockers.is_empty();
+    let status = derive_close_checklist_status(checklist, can_progress);
+
+    CloseChecklistProgression {
+        checklist_id: checklist.checklist_id.clone(),
+        legal_entity_id: checklist.legal_entity_id.clone(),
+        period_id: checklist.period_id.clone(),
+        status,
+        can_progress,
+        unresolved_blockers,
+    }
+}
+
+pub fn evaluate_entity_close_checklist_for_actor(
+    checklist: &EntityCloseChecklist,
+    _actor: &CloseChecklistActorContext,
+) -> CloseChecklistProgression {
+    evaluate_entity_close_checklist(checklist)
+}
+
+pub fn transition_close_dependency_status(
+    checklist: &EntityCloseChecklist,
+    dependency_id: &str,
+    next_status: CloseDependencyStatus,
+    updated_at: DateTime<Utc>,
+) -> Result<EntityCloseChecklist, CloseChecklistError> {
+    let mut updated = checklist.clone();
+    let dependency = updated
+        .dependencies
+        .iter_mut()
+        .find(|dependency| dependency.dependency_id == dependency_id)
+        .ok_or_else(|| CloseChecklistError::DependencyNotFound {
+            dependency_id: dependency_id.to_string(),
+        })?;
+
+    if !is_valid_close_dependency_transition(&dependency.status, &next_status) {
+        return Err(CloseChecklistError::InvalidDependencyTransition {
+            from: dependency.status.clone(),
+            to: next_status,
+        });
+    }
+
+    dependency.status = next_status;
+    updated.updated_at = updated_at;
+    let progression = evaluate_entity_close_checklist(&updated);
+    updated.status = progression.status;
+
+    Ok(updated)
+}
+
+pub fn simulate_multi_entity_close_dry_run(
+    input: &MultiEntityCloseDryRunInput,
+) -> Result<MultiEntityCloseDryRunResult, CloseChecklistError> {
+    simulate_multi_entity_close_dry_run_internal(input, None)
+}
+
+pub fn simulate_multi_entity_close_dry_run_for_actor(
+    input: &MultiEntityCloseDryRunInput,
+    actor: &CloseChecklistActorContext,
+) -> Result<MultiEntityCloseDryRunResult, CloseChecklistError> {
+    simulate_multi_entity_close_dry_run_internal(input, Some(actor))
 }
 
 pub fn reconcile_v1(input: &ReconRunInput) -> ReconRunResult {
@@ -383,6 +546,113 @@ pub fn route_exception(input: &ReconException, outcome: MatchOutcome) -> ReconRo
     }
 }
 
+fn simulate_multi_entity_close_dry_run_internal(
+    input: &MultiEntityCloseDryRunInput,
+    actor: Option<&CloseChecklistActorContext>,
+) -> Result<MultiEntityCloseDryRunResult, CloseChecklistError> {
+    let entity_count = input.checklists.len();
+    if !(MIN_DRY_RUN_ENTITY_COUNT..=MAX_DRY_RUN_ENTITY_COUNT).contains(&entity_count) {
+        return Err(CloseChecklistError::UnsupportedEntityCount { entity_count });
+    }
+
+    let mut sorted_checklists = input.checklists.clone();
+    sorted_checklists.sort_by(|left, right| {
+        left.legal_entity_id
+            .cmp(&right.legal_entity_id)
+            .then(left.checklist_id.cmp(&right.checklist_id))
+    });
+
+    let mut entity_results = Vec::with_capacity(sorted_checklists.len());
+    let mut failed_entities = Vec::new();
+    for checklist in sorted_checklists {
+        let progression = if let Some(actor) = actor {
+            evaluate_entity_close_checklist_for_actor(&checklist, actor)
+        } else {
+            evaluate_entity_close_checklist(&checklist)
+        };
+        let close_ready = progression.status == CloseChecklistStatus::ReadyToClose
+            || progression.status == CloseChecklistStatus::Closed;
+        if !progression.can_progress || !close_ready {
+            failed_entities.push(checklist.legal_entity_id.clone());
+        }
+
+        entity_results.push(EntityCloseDryRunResult {
+            checklist_id: checklist.checklist_id,
+            legal_entity_id: checklist.legal_entity_id,
+            status: progression.status,
+            can_progress: progression.can_progress,
+            close_ready,
+            unresolved_blockers: progression.unresolved_blockers,
+        });
+    }
+
+    Ok(MultiEntityCloseDryRunResult {
+        run_id: input.run_id.clone(),
+        run_started_at: input.run_started_at,
+        entity_results,
+        passed: failed_entities.is_empty(),
+        failed_entities,
+    })
+}
+
+fn derive_close_checklist_status(
+    checklist: &EntityCloseChecklist,
+    can_progress: bool,
+) -> CloseChecklistStatus {
+    if !can_progress {
+        return CloseChecklistStatus::Blocked;
+    }
+    if checklist.status == CloseChecklistStatus::Closed {
+        return CloseChecklistStatus::Closed;
+    }
+
+    let ready_to_close = checklist
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.required_for_close)
+        .all(|dependency| dependency.status == CloseDependencyStatus::Satisfied);
+    if ready_to_close {
+        CloseChecklistStatus::ReadyToClose
+    } else {
+        CloseChecklistStatus::InProgress
+    }
+}
+
+fn is_valid_close_dependency_transition(
+    from: &CloseDependencyStatus,
+    to: &CloseDependencyStatus,
+) -> bool {
+    if from == to {
+        return true;
+    }
+
+    matches!(
+        (from, to),
+        (
+            CloseDependencyStatus::Pending,
+            CloseDependencyStatus::InProgress
+        ) | (
+            CloseDependencyStatus::Pending,
+            CloseDependencyStatus::Satisfied
+        ) | (
+            CloseDependencyStatus::Pending,
+            CloseDependencyStatus::Blocked
+        ) | (
+            CloseDependencyStatus::InProgress,
+            CloseDependencyStatus::Satisfied
+        ) | (
+            CloseDependencyStatus::InProgress,
+            CloseDependencyStatus::Blocked
+        ) | (
+            CloseDependencyStatus::Blocked,
+            CloseDependencyStatus::InProgress
+        ) | (
+            CloseDependencyStatus::Blocked,
+            CloseDependencyStatus::Satisfied
+        )
+    )
+}
+
 fn normalize(input: &str) -> String {
     input
         .trim()
@@ -612,6 +882,289 @@ mod tests {
         assert_eq!(result.metrics.total_candidates, 11);
         assert_eq!(result.metrics.auto_matched, 8);
         assert!(result.metrics.auto_match_rate_percent() >= 70.0);
+    }
+
+    #[test]
+    fn dependency_state_transitions_promote_entity_to_ready_to_close() {
+        let base = sample_close_checklist(
+            "LE-US",
+            vec![("bank_stmt_reconciled", CloseDependencyStatus::Pending, true)],
+            CloseChecklistStatus::InProgress,
+        );
+        let updated_at = fixed_ts() + Duration::minutes(15);
+
+        let in_progress = transition_close_dependency_status(
+            &base,
+            "bank_stmt_reconciled",
+            CloseDependencyStatus::InProgress,
+            updated_at,
+        )
+        .expect("pending to in-progress transition should be valid");
+        assert_eq!(in_progress.status, CloseChecklistStatus::InProgress);
+
+        let ready = transition_close_dependency_status(
+            &in_progress,
+            "bank_stmt_reconciled",
+            CloseDependencyStatus::Satisfied,
+            updated_at + Duration::minutes(15),
+        )
+        .expect("in-progress to satisfied transition should be valid");
+        assert_eq!(ready.status, CloseChecklistStatus::ReadyToClose);
+    }
+
+    #[test]
+    fn dependency_state_transition_rejects_regression_from_satisfied() {
+        let checklist = sample_close_checklist(
+            "LE-US",
+            vec![(
+                "bank_stmt_reconciled",
+                CloseDependencyStatus::Satisfied,
+                true,
+            )],
+            CloseChecklistStatus::ReadyToClose,
+        );
+
+        let result = transition_close_dependency_status(
+            &checklist,
+            "bank_stmt_reconciled",
+            CloseDependencyStatus::Blocked,
+            fixed_ts() + Duration::minutes(10),
+        );
+        assert_eq!(
+            result,
+            Err(CloseChecklistError::InvalidDependencyTransition {
+                from: CloseDependencyStatus::Satisfied,
+                to: CloseDependencyStatus::Blocked,
+            })
+        );
+    }
+
+    #[test]
+    fn unresolved_blockers_block_close_progression() {
+        let checklist = sample_close_checklist(
+            "LE-CA",
+            vec![
+                (
+                    "intercompany_eliminations_posted",
+                    CloseDependencyStatus::Blocked,
+                    true,
+                ),
+                (
+                    "fx_translation_complete",
+                    CloseDependencyStatus::Satisfied,
+                    true,
+                ),
+            ],
+            CloseChecklistStatus::InProgress,
+        );
+
+        let progression = evaluate_entity_close_checklist(&checklist);
+        assert!(!progression.can_progress);
+        assert_eq!(progression.status, CloseChecklistStatus::Blocked);
+        assert_eq!(
+            progression.unresolved_blockers,
+            vec!["intercompany_eliminations_posted".to_string()]
+        );
+    }
+
+    #[test]
+    fn checklist_evaluation_is_authorization_neutral() {
+        let checklist = sample_close_checklist(
+            "LE-US",
+            vec![
+                (
+                    "bank_stmt_reconciled",
+                    CloseDependencyStatus::Satisfied,
+                    true,
+                ),
+                (
+                    "fx_translation_complete",
+                    CloseDependencyStatus::Satisfied,
+                    true,
+                ),
+            ],
+            CloseChecklistStatus::InProgress,
+        );
+        let finance_actor = CloseChecklistActorContext {
+            actor_id: "u-finance".to_string(),
+            actor_role: "FINANCE_MANAGER".to_string(),
+        };
+        let qa_actor = CloseChecklistActorContext {
+            actor_id: "u-qa".to_string(),
+            actor_role: "QA_RELEASE".to_string(),
+        };
+
+        let finance_result = evaluate_entity_close_checklist_for_actor(&checklist, &finance_actor);
+        let qa_result = evaluate_entity_close_checklist_for_actor(&checklist, &qa_actor);
+
+        assert_eq!(finance_result, qa_result);
+        assert_eq!(finance_result.status, CloseChecklistStatus::ReadyToClose);
+    }
+
+    #[test]
+    fn multi_entity_close_dry_run_passes_for_two_ready_entities() {
+        let input = MultiEntityCloseDryRunInput {
+            run_id: "sprint4-dry-run-pass".to_string(),
+            run_started_at: fixed_ts(),
+            checklists: vec![
+                sample_close_checklist(
+                    "LE-US",
+                    vec![
+                        (
+                            "bank_stmt_reconciled",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                        (
+                            "fx_translation_complete",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                    ],
+                    CloseChecklistStatus::InProgress,
+                ),
+                sample_close_checklist(
+                    "LE-CA",
+                    vec![
+                        (
+                            "bank_stmt_reconciled",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                        (
+                            "fx_translation_complete",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                    ],
+                    CloseChecklistStatus::InProgress,
+                ),
+            ],
+        };
+
+        let result =
+            simulate_multi_entity_close_dry_run(&input).expect("2-entity dry run should execute");
+        assert!(result.passed);
+        assert!(result.failed_entities.is_empty());
+        assert_eq!(result.entity_results.len(), 2);
+        assert!(result.entity_results.iter().all(|item| item.close_ready));
+    }
+
+    #[test]
+    fn multi_entity_close_dry_run_fails_when_one_entity_has_blocker() {
+        let input = MultiEntityCloseDryRunInput {
+            run_id: "sprint4-dry-run-fail".to_string(),
+            run_started_at: fixed_ts(),
+            checklists: vec![
+                sample_close_checklist(
+                    "LE-US",
+                    vec![
+                        (
+                            "bank_stmt_reconciled",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                        (
+                            "fx_translation_complete",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                    ],
+                    CloseChecklistStatus::InProgress,
+                ),
+                sample_close_checklist(
+                    "LE-CA",
+                    vec![
+                        ("bank_stmt_reconciled", CloseDependencyStatus::Blocked, true),
+                        (
+                            "fx_translation_complete",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                    ],
+                    CloseChecklistStatus::InProgress,
+                ),
+                sample_close_checklist(
+                    "LE-HQ",
+                    vec![
+                        (
+                            "bank_stmt_reconciled",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                        (
+                            "fx_translation_complete",
+                            CloseDependencyStatus::Satisfied,
+                            true,
+                        ),
+                    ],
+                    CloseChecklistStatus::InProgress,
+                ),
+            ],
+        };
+        let actor = CloseChecklistActorContext {
+            actor_id: "u-controller".to_string(),
+            actor_role: "CONTROLLER".to_string(),
+        };
+
+        let result = simulate_multi_entity_close_dry_run_for_actor(&input, &actor)
+            .expect("3-entity dry run should execute");
+        assert!(!result.passed);
+        assert_eq!(result.failed_entities, vec!["LE-CA".to_string()]);
+        assert!(result
+            .entity_results
+            .iter()
+            .any(|item| item.legal_entity_id == "LE-CA"
+                && !item.can_progress
+                && !item.unresolved_blockers.is_empty()));
+    }
+
+    #[test]
+    fn multi_entity_close_dry_run_requires_two_to_three_entities() {
+        let input = MultiEntityCloseDryRunInput {
+            run_id: "sprint4-dry-run-invalid".to_string(),
+            run_started_at: fixed_ts(),
+            checklists: vec![sample_close_checklist(
+                "LE-US",
+                vec![(
+                    "bank_stmt_reconciled",
+                    CloseDependencyStatus::Satisfied,
+                    true,
+                )],
+                CloseChecklistStatus::ReadyToClose,
+            )],
+        };
+
+        let result = simulate_multi_entity_close_dry_run(&input);
+        assert_eq!(
+            result,
+            Err(CloseChecklistError::UnsupportedEntityCount { entity_count: 1 })
+        );
+    }
+
+    fn sample_close_checklist(
+        legal_entity_id: &str,
+        dependency_specs: Vec<(&str, CloseDependencyStatus, bool)>,
+        status: CloseChecklistStatus,
+    ) -> EntityCloseChecklist {
+        EntityCloseChecklist {
+            checklist_id: format!("CHK-{legal_entity_id}"),
+            legal_entity_id: legal_entity_id.to_string(),
+            period_id: "2026-02".to_string(),
+            status,
+            dependencies: dependency_specs
+                .into_iter()
+                .map(|(dependency_id, dependency_status, required_for_close)| {
+                    CloseChecklistDependency {
+                        dependency_id: dependency_id.to_string(),
+                        description: dependency_id.to_string(),
+                        required_for_close,
+                        status: dependency_status,
+                    }
+                })
+                .collect(),
+            updated_at: fixed_ts(),
+        }
     }
 
     fn seeded_fixture() -> ReconRunInput {

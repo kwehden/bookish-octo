@@ -59,6 +59,17 @@ impl ConnectorAdapter for SquareAdapter {
             &["/legal_entity_id", "/data/object/legal_entity_id"],
             "legal_entity_id",
         )?;
+        let location_id = required_string(
+            &payload,
+            &[
+                "/location_id",
+                "/merchant_location_id",
+                "/data/object/location_id",
+                "/location/id",
+                "/data/object/location/id",
+            ],
+            "location_id",
+        )?;
         let kind = detect_event_kind(&payload)?;
         let canonical_payload = match kind {
             SquareEventKind::Sale => normalize_sale(&payload, occurred_at)?,
@@ -66,6 +77,8 @@ impl ConnectorAdapter for SquareAdapter {
             SquareEventKind::Tender => normalize_tender(&payload, occurred_at)?,
             SquareEventKind::Payout => normalize_payout(&payload, occurred_at)?,
         };
+        let canonical_payload =
+            with_routing_context(canonical_payload, &legal_entity_id, &location_id);
 
         let payload_digest = payload_hash(&canonical_payload);
         let event_id = format!(
@@ -136,6 +149,27 @@ impl ConnectorAdapter for SquareAdapter {
             trace_context,
         })
     }
+}
+
+fn with_routing_context(
+    mut canonical_payload: Value,
+    legal_entity_id: &str,
+    location_id: &str,
+) -> Value {
+    if let Some(object) = canonical_payload.as_object_mut() {
+        object.insert(
+            "location_id".to_string(),
+            Value::String(location_id.to_string()),
+        );
+        object.insert(
+            "routing".to_string(),
+            json!({
+                "legal_entity_id": legal_entity_id,
+                "location_id": location_id
+            }),
+        );
+    }
+    canonical_payload
 }
 
 fn detect_event_kind(payload: &Value) -> Result<SquareEventKind, ConnectorError> {
@@ -490,6 +524,7 @@ mod tests {
                 "type": "payment.created",
                 "tenant_id": "tenant_1",
                 "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
                 "order_id": "ord_123",
                 "amount_money": {"amount": 17120, "currency": "USD"},
                 "idempotency_key": "square:idem:sale",
@@ -504,6 +539,10 @@ mod tests {
         assert_eq!(canonical.event_type, "order.captured.v1");
         assert_eq!(canonical.payload["order_id"], json!("ord_123"));
         assert_eq!(canonical.payload["amount_minor"], json!(17120));
+        assert_eq!(
+            canonical.payload["routing"]["location_id"],
+            json!("BRECK_BASE_AREA")
+        );
         assert_eq!(
             canonical.trace_context.idempotency_key,
             "square:idem:sale".to_string()
@@ -522,6 +561,7 @@ mod tests {
                 "entity": "refund",
                 "tenant_id": "tenant_1",
                 "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
                 "refund_id": "rf_789",
                 "payment_id": "pay_123",
                 "amount_minor": 2500,
@@ -549,6 +589,7 @@ mod tests {
                 "kind": "tender",
                 "tenant_id": "tenant_1",
                 "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
                 "tender_id": "tnd_1",
                 "order_id": "ord_123",
                 "gross_amount_minor": 10000,
@@ -574,6 +615,7 @@ mod tests {
                 "event_type": "payout.paid",
                 "tenant_id": "tenant_1",
                 "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
                 "payout_id": "po_456",
                 "amount_minor": 9750,
                 "currency": "USD"
@@ -596,6 +638,7 @@ mod tests {
             payload: json!({
                 "tenant_id": "tenant_1",
                 "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
                 "event_type": "inventory.adjusted"
             }),
         };
@@ -604,6 +647,28 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "normalization failed: unsupported square event kind"
+        );
+    }
+
+    #[tokio::test]
+    async fn normalize_fails_when_location_is_missing() {
+        let adapter = SquareAdapter;
+        let raw = crate::RawEvent {
+            source_event_id: "sq_evt_sale_2".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "type": "payment.created",
+                "tenant_id": "tenant_1",
+                "legal_entity_id": "US_CO_01",
+                "order_id": "ord_123",
+                "amount_money": {"amount": 17120, "currency": "USD"}
+            }),
+        };
+
+        let error = adapter.normalize(raw).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "normalization failed: missing field `location_id`"
         );
     }
 }

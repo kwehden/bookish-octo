@@ -23,6 +23,16 @@ impl ConnectorAdapter for InntopiaAdapter {
         let reservation_id = required_string(&payload, "reservation_id")?;
         let tenant_id = required_string(&payload, "tenant_id")?;
         let legal_entity_id = required_string(&payload, "legal_entity_id")?;
+        let location_id = first_string(
+            &payload,
+            &[
+                "/location_id",
+                "/resort_location_id",
+                "/location/id",
+                "/property/location_id",
+            ],
+        )
+        .ok_or_else(|| ConnectorError::Normalize("missing field `location_id`".to_string()))?;
 
         let total_amount_minor = first_i64(
             &payload,
@@ -50,6 +60,11 @@ impl ConnectorAdapter for InntopiaAdapter {
             "reservation_status": first_string(&payload, &["/reservation_status"])
                 .unwrap_or_else(|| "CAPTURED".to_string()),
             "business_date": business_date,
+            "location_id": location_id.clone(),
+            "routing": {
+                "legal_entity_id": legal_entity_id.clone(),
+                "location_id": location_id
+            },
             "currency": currency,
             "total_amount_minor": total_amount_minor,
             "arrival_date": payload.get("arrival_date"),
@@ -155,6 +170,7 @@ mod tests {
                 "reservation_id": "resv_001",
                 "tenant_id": "tenant_1",
                 "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
                 "total_amount_minor": 41250,
                 "currency": "USD",
                 "business_date": "2026-02-21",
@@ -170,6 +186,14 @@ mod tests {
         assert_eq!(canonical.event_type, "inntopia.reservation.captured.v1");
         assert_eq!(canonical.trace_context.idempotency_key, "inntopia:evt_123");
         assert_eq!(canonical.trace_context.correlation_id, "corr_456");
+        assert_eq!(
+            canonical.payload["routing"]["legal_entity_id"],
+            json!("US_CO_01")
+        );
+        assert_eq!(
+            canonical.payload["routing"]["location_id"],
+            json!("BRECK_BASE_AREA")
+        );
         assert_eq!(
             canonical.payload["total_amount_minor"].as_i64(),
             Some(41250)
@@ -192,6 +216,27 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "normalization failed: missing field `reservation_id`"
+        );
+    }
+
+    #[tokio::test]
+    async fn normalize_fails_when_location_missing() {
+        let adapter = InntopiaAdapter;
+        let raw = crate::RawEvent {
+            source_event_id: "evt_456".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "reservation_id": "resv_001",
+                "tenant_id": "tenant_1",
+                "legal_entity_id": "US_CO_01",
+                "total_amount_minor": 41250
+            }),
+        };
+
+        let error = adapter.normalize(raw).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "normalization failed: missing field `location_id`"
         );
     }
 }

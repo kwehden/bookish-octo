@@ -23,3 +23,15 @@
 - [ ] Sprint 3 signoff packet attached in `governance/sprint3_signoff_packet.md`
 - [ ] Sprint 3 completion rubric attached in `governance/SPRINT3_PLAN_COMPLETION_REPORT.md`
 - [ ] OPA test evidence attached for Sprint 3 controls (`opa test policies/opa`)
+
+## Sprint 4 Checklist
+
+- [ ] SoD evidence confirms `finance_operator` denied for `posting_approval`, `intercompany_posting_approval`, `close_approval`, and `master_data_change`
+- [ ] Multi-entity intercompany approval evidence validates distinct `from_legal_entity_id`/`to_legal_entity_id` pair and in-pair approver entity membership
+- [ ] Intercompany governance evidence includes `intercompany_contract_id` and `journal_batch_id` for each approval trace
+- [ ] Close approval evidence validates required `close_period_id` and `close_checklist_id` before authorization
+- [ ] Master-data governance evidence validates `master_data_domain`, `change_set_id`, and `change_request_id` linkage
+- [ ] Non-bypassable control evidence confirms break-glass denial for Sprint 4 approval/master-data actions
+- [ ] Sprint 4 signoff packet attached in `governance/sprint4_signoff_packet.md`
+- [ ] Sprint 4 completion rubric attached in `governance/SPRINT4_PLAN_COMPLETION_REPORT.md`
+- [ ] OPA test evidence attached for Sprint 4 controls (`opa test policies/opa`)
