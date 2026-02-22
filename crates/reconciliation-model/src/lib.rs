@@ -155,6 +155,17 @@ pub struct ReconComplianceEvidenceExport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostCutoverMonitoringSnapshot {
+    pub run_id: String,
+    pub generated_at: DateTime<Utc>,
+    pub unresolved_overdue_bps: u32,
+    pub open_critical_defects: u32,
+    pub uat_attested: bool,
+    pub perf_certified: bool,
+    pub release_ready: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReconException {
     pub exception_id: String,
     pub exception_type: String,
@@ -355,20 +366,20 @@ pub fn reconcile_v1(input: &ReconRunInput) -> ReconRunResult {
     for order in &sorted_orders {
         let mut outcome = MatchOutcome::MatchedExact;
         let mut reason_code = None;
-        let mut matched_payment = None;
-        let mut matched_payout = None;
+        let mut matched_payment: Option<&ReconPayment> = None;
+        let mut matched_payout: Option<&ReconPayout> = None;
 
-        let payment_candidates = payment_index
+        let payment_candidates: &[ReconPayment] = payment_index
             .get(&order.payment_id)
-            .cloned()
-            .unwrap_or_default();
-        match payment_candidates.as_slice() {
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        match payment_candidates {
             [] => {
                 outcome = MatchOutcome::Unmatched;
                 reason_code = Some(ReconReasonCode::MissingGatewayReference);
             }
             [payment] => {
-                matched_payment = Some(payment.clone());
+                matched_payment = Some(payment);
             }
             _ => {
                 outcome = MatchOutcome::Duplicate;
@@ -376,18 +387,18 @@ pub fn reconcile_v1(input: &ReconRunInput) -> ReconRunResult {
             }
         }
 
-        let payout_candidates = payout_index
+        let payout_candidates: &[ReconPayout] = payout_index
             .get(&order.payout_id)
-            .cloned()
-            .unwrap_or_default();
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         if reason_code.is_none() {
-            match payout_candidates.as_slice() {
+            match payout_candidates {
                 [] => {
                     outcome = MatchOutcome::Unmatched;
                     reason_code = Some(ReconReasonCode::MissingBankReference);
                 }
                 [payout] => {
-                    matched_payout = Some(payout.clone());
+                    matched_payout = Some(payout);
                 }
                 _ => {
                     outcome = MatchOutcome::Duplicate;
@@ -548,7 +559,11 @@ pub fn unresolved_exception_sla_metrics(
         total_open,
         overdue,
         on_track,
-        overdue_rate_bps: ratio_to_bps(overdue, total_open),
+        overdue_rate_bps: if total_open == 0 {
+            0
+        } else {
+            ratio_to_bps(overdue, total_open)
+        },
     }
 }
 
@@ -569,6 +584,30 @@ pub fn build_recon_compliance_evidence_export(
         dispute_aging: dispute_aging_buckets(&result.exception_queue, as_of),
         unresolved_sla: unresolved_exception_sla_metrics(&result.exception_queue, as_of),
         owner_queue_counts,
+    }
+}
+
+pub fn build_post_cutover_monitoring_snapshot(
+    result: &ReconRunResult,
+    as_of: DateTime<Utc>,
+    open_critical_defects: u32,
+    uat_attested: bool,
+    perf_certified: bool,
+) -> PostCutoverMonitoringSnapshot {
+    let sla = unresolved_exception_sla_metrics(&result.exception_queue, as_of);
+    let release_ready = open_critical_defects == 0
+        && uat_attested
+        && perf_certified
+        && sla.overdue_rate_bps <= 1000;
+
+    PostCutoverMonitoringSnapshot {
+        run_id: result.run_id.clone(),
+        generated_at: as_of,
+        unresolved_overdue_bps: sla.overdue_rate_bps,
+        open_critical_defects,
+        uat_attested,
+        perf_certified,
+        release_ready,
     }
 }
 
@@ -776,7 +815,7 @@ fn normalize_run_id(input: &str) -> String {
 
 fn ratio_to_bps(numerator: u32, denominator: u32) -> u32 {
     if denominator == 0 {
-        ONE_HUNDRED_PERCENT_BPS
+        0
     } else {
         ((numerator as u64 * ONE_HUNDRED_PERCENT_BPS as u64) / denominator as u64) as u32
     }
@@ -985,6 +1024,65 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_v1_metrics_return_zero_rates_when_no_candidates() {
+        let input = ReconRunInput {
+            run_id: "empty_run".to_string(),
+            run_started_at: fixed_ts(),
+            orders: vec![],
+            payments: vec![],
+            payouts: vec![],
+            tolerance_minor: DEFAULT_MATCH_TOLERANCE_MINOR,
+        };
+
+        let result = reconcile_v1(&input);
+        assert_eq!(result.metrics.total_candidates, 0);
+        assert_eq!(result.metrics.non_auto_candidates, 0);
+        assert_eq!(result.metrics.auto_match_rate_bps, 0);
+        assert_eq!(result.metrics.routed_exception_rate_bps, 0);
+    }
+
+    #[test]
+    fn reconcile_v1_routed_exception_rate_is_zero_when_no_non_auto_candidates() {
+        let run_started_at = fixed_ts();
+        let input = ReconRunInput {
+            run_id: "all_auto".to_string(),
+            run_started_at,
+            orders: vec![sample_order(
+                "O-001",
+                "P-001",
+                "PO-001",
+                "USD",
+                10_000,
+                run_started_at,
+            )],
+            payments: vec![sample_payment(
+                "P-001",
+                "O-001",
+                "PO-001",
+                "USD",
+                10_000,
+                run_started_at,
+            )],
+            payouts: vec![sample_payout(
+                "PO-001",
+                "P-001",
+                "BANK-001",
+                "USD",
+                10_000,
+                run_started_at,
+            )],
+            tolerance_minor: DEFAULT_MATCH_TOLERANCE_MINOR,
+        };
+
+        let result = reconcile_v1(&input);
+        assert_eq!(result.metrics.total_candidates, 1);
+        assert_eq!(result.metrics.auto_matched, 1);
+        assert_eq!(result.metrics.non_auto_candidates, 0);
+        assert_eq!(result.metrics.routed_exceptions, 0);
+        assert_eq!(result.metrics.routed_exception_rate_bps, 0);
+    }
+
+    #[test]
     fn dispute_aging_buckets_are_computed_for_exception_queue() {
         let fixture = seeded_fixture();
         let result = reconcile_v1(&fixture);
@@ -1039,6 +1137,67 @@ mod tests {
         assert_eq!(export.owner_queue_counts.get("PAYMENTS_OPS"), Some(&1));
         assert_eq!(export.owner_queue_counts.get("TREASURY_OPS"), Some(&1));
         assert_eq!(export.owner_queue_counts.get("DATA_QUALITY"), Some(&1));
+    }
+
+    #[test]
+    fn post_cutover_monitoring_is_release_ready_when_gates_are_green() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(3);
+
+        let snapshot = build_post_cutover_monitoring_snapshot(&result, as_of, 0, true, true);
+        assert!(snapshot.release_ready);
+        assert_eq!(snapshot.open_critical_defects, 0);
+    }
+
+    #[test]
+    fn post_cutover_monitoring_blocks_release_on_critical_defects() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(6);
+
+        let snapshot = build_post_cutover_monitoring_snapshot(&result, as_of, 2, true, true);
+        assert!(!snapshot.release_ready);
+        assert_eq!(snapshot.open_critical_defects, 2);
+    }
+
+    #[test]
+    fn post_cutover_monitoring_blocks_release_without_uat_attestation() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(3);
+
+        let snapshot = build_post_cutover_monitoring_snapshot(&result, as_of, 0, false, true);
+        assert!(!snapshot.release_ready);
+    }
+
+    #[test]
+    fn post_cutover_monitoring_blocks_release_without_perf_certification() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(3);
+
+        let snapshot = build_post_cutover_monitoring_snapshot(&result, as_of, 0, true, false);
+        assert!(!snapshot.release_ready);
+    }
+
+    #[test]
+    fn post_cutover_monitoring_blocks_release_when_overdue_rate_exceeds_threshold() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(10);
+
+        let snapshot = build_post_cutover_monitoring_snapshot(&result, as_of, 0, true, true);
+        assert!(!snapshot.release_ready);
+        assert!(snapshot.unresolved_overdue_bps > 1000);
+    }
+
+    #[test]
+    fn unresolved_sla_metrics_return_zero_bps_when_no_open_exceptions() {
+        let metrics = unresolved_exception_sla_metrics(&[], fixed_ts());
+        assert_eq!(metrics.total_open, 0);
+        assert_eq!(metrics.overdue, 0);
+        assert_eq!(metrics.overdue_rate_bps, 0);
     }
 
     #[test]
@@ -1296,6 +1455,58 @@ mod tests {
         assert_eq!(
             result,
             Err(CloseChecklistError::UnsupportedEntityCount { entity_count: 1 })
+        );
+    }
+
+    #[test]
+    fn multi_entity_close_dry_run_rejects_more_than_three_entities() {
+        let input = MultiEntityCloseDryRunInput {
+            run_id: "sprint6-dry-run-invalid-max".to_string(),
+            run_started_at: fixed_ts(),
+            checklists: vec![
+                sample_close_checklist(
+                    "LE-US",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+                sample_close_checklist(
+                    "LE-CA",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+                sample_close_checklist(
+                    "LE-HQ",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+                sample_close_checklist(
+                    "LE-NV",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+            ],
+        };
+
+        let result = simulate_multi_entity_close_dry_run(&input);
+        assert_eq!(
+            result,
+            Err(CloseChecklistError::UnsupportedEntityCount { entity_count: 4 })
         );
     }
 

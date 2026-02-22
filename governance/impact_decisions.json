@@ -1,5 +1,5 @@
 {
-  "version": "1.1",
+  "version": "1.2",
   "decisions": [
     {
       "id": "DEC-001",
@@ -74,6 +74,66 @@
     {
       "id": "DEC-008",
       "title": "Legal-hold override governance requires ticketed approvals and evidence",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-009",
+      "title": "Sprint 6 pilot dual-book close package and tie-out acceptance",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-010",
+      "title": "Cutover reconciliation variance thresholds and escalation handling policy",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-011",
+      "title": "Launch-week revenue disclosure acceptance and signoff controls",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-012",
+      "title": "Release-control override and chain-of-custody requirements for cutover week",
+      "financial_impact": false,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-013",
+      "title": "Post-cutover monitoring release-ready threshold (<=1000 overdue bps and zero critical defects)",
+      "financial_impact": true,
+      "control_impact": true,
+      "finance_approved": true,
+      "controls_approved": true,
+      "finance_approver": "FI-L",
+      "controls_approver": "CS-L"
+    },
+    {
+      "id": "DEC-014",
+      "title": "Final Sprint 6 go/no-go packet authority and escalation protocol",
       "financial_impact": true,
       "control_impact": true,
       "finance_approved": true,

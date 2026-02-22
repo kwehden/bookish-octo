@@ -13,10 +13,14 @@ required_paths = [
     "controls/TAMPER_SEALING_VERIFICATION_V1.md",
     "controls/ACCESS_REVIEW_REPORTING_V1.md",
     "controls/PCI_SCOPE_CONTROL_OWNERSHIP_MATRIX_V1.md",
+    "controls/RELEASE_CONTROL_CHECKLIST_V1.md",
+    "controls/INCIDENT_RESPONSE_DRILL_REPORT_V1.md",
     "policies/opa/access.rego",
     "policies/opa/access_test.rego",
+    "scripts/validate_sprint6_controls.py",
     "governance/impact_decisions.json",
     "specs/SPRINT5_RECON_EVIDENCE_EXPORT.md",
+    "specs/SPRINT6_CUTOVER_MONITORING_CONTRACT.md",
 ]
 
 missing = [p for p in required_paths if not Path(p).exists()]

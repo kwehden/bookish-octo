@@ -59,7 +59,7 @@ impl ConnectorAdapter for InntopiaAdapter {
             "reservation_id": reservation_id,
             "reservation_status": first_string(&payload, &["/reservation_status"])
                 .unwrap_or_else(|| "CAPTURED".to_string()),
-            "business_date": business_date,
+            "business_date": business_date.clone(),
             "location_id": location_id.clone(),
             "routing": {
                 "legal_entity_id": legal_entity_id.clone(),
@@ -80,13 +80,14 @@ impl ConnectorAdapter for InntopiaAdapter {
             source_event_id,
             &payload_digest[..12].to_ascii_lowercase()
         );
+        let idempotency_key = first_string(
+            &canonical_payload,
+            &["/extensions/source_payload/idempotency_key"],
+        )
+        .unwrap_or_else(|| format!("inntopia:{source_event_id}:reservation.captured"));
 
         let trace_context = CanonicalTraceContext {
-            idempotency_key: first_string(
-                &canonical_payload,
-                &["/extensions/source_payload/idempotency_key"],
-            )
-            .unwrap_or_else(|| format!("inntopia:{source_event_id}:reservation.captured")),
+            idempotency_key: idempotency_key.clone(),
             correlation_id: first_string(
                 &canonical_payload,
                 &["/extensions/source_payload/correlation_id"],
@@ -118,8 +119,11 @@ impl ConnectorAdapter for InntopiaAdapter {
             schema_version: "1.0.0".to_string(),
             source_system: self.source_system().to_string(),
             source_event_id,
+            occurred_at,
+            business_date,
             tenant_id,
             legal_entity_id,
+            idempotency_key,
             payload: canonical_payload,
             trace_context,
         })
@@ -158,7 +162,10 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use crate::{run_replay_backfill_resiliency, ConnectorAdapter, RawEvent};
+    use crate::{
+        evaluate_cutover_rehearsal, run_replay_backfill_resiliency, ConnectorAdapter,
+        CutoverCheckpoint, RawEvent,
+    };
 
     use super::InntopiaAdapter;
 
@@ -186,6 +193,8 @@ mod tests {
 
         let canonical = adapter.normalize(raw).await.unwrap();
         assert_eq!(canonical.event_type, "inntopia.reservation.captured.v1");
+        assert_eq!(canonical.business_date, "2026-02-21");
+        assert_eq!(canonical.idempotency_key, "inntopia:evt_123");
         assert_eq!(canonical.trace_context.idempotency_key, "inntopia:evt_123");
         assert_eq!(canonical.trace_context.correlation_id, "corr_456");
         assert_eq!(
@@ -281,5 +290,37 @@ mod tests {
         assert_eq!(result.telemetry.first_attempt_failures, 1);
         assert_eq!(result.telemetry.recovered_events, 1);
         assert!(result.telemetry.objective_met);
+    }
+
+    #[tokio::test]
+    async fn cutover_rehearsal_flags_failed_inntopia_checkpoint() {
+        let adapter = InntopiaAdapter;
+        let events = vec![RawEvent {
+            source_event_id: "evt_950".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "reservation_id": "resv_950",
+                "tenant_id": "tenant_1",
+                "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
+                "total_amount_minor": 10000,
+                "currency": "USD"
+            }),
+        }];
+
+        let replay = run_replay_backfill_resiliency(&adapter, &events, &BTreeSet::new(), 1000, 200)
+            .await
+            .unwrap();
+        let rehearsal = evaluate_cutover_rehearsal(
+            &replay,
+            true,
+            &[CutoverCheckpoint {
+                name: "inntopia_cutover_dry_run".to_string(),
+                passed: false,
+            }],
+        );
+
+        assert!(!rehearsal.passed);
+        assert!(rehearsal.replay_objective_met);
     }
 }

@@ -1,6 +1,6 @@
 # Sprint 4 Close Checklist Contract (v1)
 
-Last updated: February 21, 2026  
+Last updated: February 22, 2026  
 Owner: Data/Reconciliation
 
 ## 1. Scope
@@ -92,3 +92,13 @@ Implemented in `crates/reconciliation-model/src/lib.rs`:
 - `multi_entity_close_dry_run_passes_for_two_ready_entities`
 - `multi_entity_close_dry_run_fails_when_one_entity_has_blocker`
 - `multi_entity_close_dry_run_requires_two_to_three_entities`
+
+## 8. Sprint 4 In-Repo Approval/Evidence Status
+- [x] Contract artifact published and referenced by Sprint 4 gate report.
+- [x] Sprint 4 gate report evidence published for checklist and dry-run behavior.
+- [x] Sprint 4 signoff packet updated with completed in-repo approvals.
+- [x] Sprint 4 completion report updated to separate in-repo closure from external attestations.
+
+## 9. Remaining External Items (Carried in Sprint 5/6)
+- Business-owner UAT attestation remains pending outside this repository.
+- 2,000-user no-bend performance certification remains pending outside this repository.

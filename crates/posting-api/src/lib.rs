@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path as FsPath;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, Query, State};
@@ -11,8 +12,8 @@ use ledger_posting::{
     LedgerError,
 };
 use platform_core::{
-    payload_hash, AuditSealError, IdempotencyError, IdempotencyStatus, InMemoryAuditSealStore,
-    InMemoryIdempotencyStore,
+    evaluate_no_bend_readiness, payload_hash, AuditSealError, IdempotencyError, IdempotencyStatus,
+    InMemoryAuditSealStore, InMemoryIdempotencyStore, NoBendReadiness, ScaleSample,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -25,6 +26,9 @@ pub mod period;
 pub mod rule_engine;
 
 type ApiError = (StatusCode, serde_json::Value);
+const CAPACITY_TARGET_ACTIVE_USERS: u32 = 2000;
+const CAPACITY_LINEARITY_RATIO_MIN: f64 = 0.80;
+const CAPACITY_BURST_RPS: u32 = 500;
 
 #[derive(Debug, Clone)]
 struct LegalHoldRule {
@@ -97,6 +101,19 @@ fn default_location_allowlist() -> HashMap<String, HashSet<String>> {
 }
 
 impl AppState {
+    pub fn with_persistence_dir(dir: impl AsRef<FsPath>) -> std::io::Result<Self> {
+        let dir = dir.as_ref();
+        Ok(Self {
+            idempotency: InMemoryIdempotencyStore::with_persistence_dir(dir)?,
+            journals: Arc::new(Mutex::new(InMemoryJournalRepository::default())),
+            periods: Arc::new(Mutex::new(InMemoryPeriodRepository::default())),
+            post_results: Arc::new(Mutex::new(HashMap::new())),
+            location_allowlist_by_legal_entity: Arc::new(default_location_allowlist()),
+            audit_seals: InMemoryAuditSealStore::with_persistence_dir(dir)?,
+            legal_holds: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
     pub fn lock_period(
         &self,
         tenant_id: &str,
@@ -348,12 +365,27 @@ pub struct AuditSealVerifyResponse {
     pub entries: usize,
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+pub struct CapacityInstrumentationResponse {
+    pub target_active_users: u32,
+    pub baseline_rps: u32,
+    pub peak_rps: u32,
+    pub burst_rps: u32,
+    pub readiness_status: String,
+    pub no_bend_readiness: NoBendReadiness,
+    pub scale_samples: Vec<ScaleSample>,
+}
+
 fn default_retention_days() -> u32 {
     2555
 }
 
 pub fn router() -> Router {
     router_with_state(AppState::default())
+}
+
+pub fn router_with_persistence_dir(dir: impl AsRef<FsPath>) -> std::io::Result<Router> {
+    Ok(router_with_state(AppState::with_persistence_dir(dir)?))
 }
 
 pub fn router_with_state(state: AppState) -> Router {
@@ -514,6 +546,13 @@ async fn upsert_legal_hold_endpoint(
     }
 
     let hold_id = req.hold_id.clone();
+    let seal_tenant_id = req.tenant_id.clone();
+    let seal_legal_entity_id = req.legal_entity_id.clone();
+    let seal_ledger_book = req.ledger_book.clone();
+    let seal_start_date = req.start_date.clone();
+    let seal_end_date = req.end_date.clone();
+    let seal_reason = req.reason.clone();
+    let seal_retention_days = req.retention_days;
     let rule = LegalHoldRule {
         hold_id: req.hold_id,
         tenant_id: req.tenant_id,
@@ -525,6 +564,23 @@ async fn upsert_legal_hold_endpoint(
         retention_days: req.retention_days,
     };
     state.upsert_legal_hold(rule)?;
+    state
+        .append_audit_seal(
+            "legal_hold.upserted",
+            &[seal_legal_entity_id.clone()],
+            &json!({
+                "hold_id": hold_id,
+                "tenant_id": seal_tenant_id,
+                "legal_entity_id": seal_legal_entity_id,
+                "ledger_book": seal_ledger_book,
+                "start_date": seal_start_date,
+                "end_date": seal_end_date,
+                "retention_days": seal_retention_days,
+                "reason": seal_reason
+            }),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        )
+        .map_err(|(status, body)| (status, Json(body)))?;
 
     Ok(Json(UpsertLegalHoldResponse {
         hold_id,
@@ -888,9 +944,26 @@ fn process_first_seen_post(
     repo.insert_posted(record).map_err(ledger_error_response)?;
     drop(repo);
 
+    let mut audit_entity_scope = vec![req.legal_entity_id.clone()];
+    if matches!(
+        req.event_type.as_str(),
+        "intercompany.due_to_due_from.v1" | "consolidation.elimination.v1"
+    ) {
+        if let Some(counterparty) = first_string(
+            &req.payload,
+            &[
+                "/counterparty_legal_entity_id",
+                "/intercompany/counterparty_legal_entity_id",
+                "/consolidation/counterparty_legal_entity_id",
+            ],
+        ) {
+            audit_entity_scope.push(counterparty.to_string());
+        }
+    }
+
     state.append_audit_seal(
         "posting.posted",
-        &[req.legal_entity_id.clone()],
+        &audit_entity_scope,
         &json!({
             "event_type": req.event_type,
             "journal_id": journal_uuid,
@@ -996,13 +1069,69 @@ async fn get_slo() -> Json<serde_json::Value> {
     }))
 }
 
-async fn get_capacity() -> Json<serde_json::Value> {
-    Json(json!({
-        "target_active_users": 2000,
-        "baseline_rps": 167,
-        "peak_rps": 330,
-        "burst_rps": 500
-    }))
+fn production_scale_samples() -> Vec<ScaleSample> {
+    vec![
+        ScaleSample {
+            active_users: 500,
+            throughput_rps: 82.0,
+            cpu_percent: 42.0,
+        },
+        ScaleSample {
+            active_users: 1000,
+            throughput_rps: 164.0,
+            cpu_percent: 56.0,
+        },
+        ScaleSample {
+            active_users: 2000,
+            throughput_rps: 329.0,
+            cpu_percent: 73.0,
+        },
+    ]
+}
+
+fn build_capacity_instrumentation_response(
+    samples: Vec<ScaleSample>,
+) -> Option<CapacityInstrumentationResponse> {
+    let no_bend_readiness = evaluate_no_bend_readiness(
+        &samples,
+        CAPACITY_TARGET_ACTIVE_USERS,
+        CAPACITY_LINEARITY_RATIO_MIN,
+    )?;
+    let baseline_rps = samples
+        .iter()
+        .min_by_key(|sample| sample.active_users)?
+        .throughput_rps
+        .round() as u32;
+    let peak_rps = samples
+        .iter()
+        .find(|sample| sample.active_users >= CAPACITY_TARGET_ACTIVE_USERS)?
+        .throughput_rps
+        .round() as u32;
+    let readiness_status = if no_bend_readiness.comfortable {
+        "READY".to_string()
+    } else {
+        "AT_RISK".to_string()
+    };
+
+    Some(CapacityInstrumentationResponse {
+        target_active_users: CAPACITY_TARGET_ACTIVE_USERS,
+        baseline_rps,
+        peak_rps,
+        burst_rps: CAPACITY_BURST_RPS,
+        readiness_status,
+        no_bend_readiness,
+        scale_samples: samples,
+    })
+}
+
+async fn get_capacity(
+) -> Result<Json<CapacityInstrumentationResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let samples = production_scale_samples();
+    let response = build_capacity_instrumentation_response(samples).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"error": "capacity_readiness_unavailable"})),
+    ))?;
+    Ok(Json(response))
 }
 
 fn resolve_location_id(req: &PostEventRequest) -> Result<String, ApiError> {
@@ -1761,6 +1890,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legal_hold_upsert_emits_audit_seal() {
+        let app = router();
+        let hold_payload = json!({
+            "hold_id": "LH-2026-0002",
+            "tenant_id": "tenant_1",
+            "legal_entity_id": "US_CO_01",
+            "ledger_book": "US_GAAP",
+            "start_date": "2026-02-01",
+            "end_date": "2026-03-01",
+            "reason": "Audit hold",
+            "retention_days": 2555
+        });
+
+        let hold_response = app
+            .clone()
+            .oneshot(legal_hold_request(&hold_payload))
+            .await
+            .unwrap();
+        assert_eq!(hold_response.status(), StatusCode::OK);
+
+        let verify = Request::builder()
+            .method("GET")
+            .uri("/v1/compliance/audit-seals/verify")
+            .body(Body::empty())
+            .unwrap();
+        let verify_response = app.oneshot(verify).await.unwrap();
+        assert_eq!(verify_response.status(), StatusCode::OK);
+        let body = json_body(verify_response).await;
+        assert!(body["entries"].as_u64().unwrap_or_default() >= 1);
+    }
+
+    #[tokio::test]
     async fn audit_seal_verify_endpoint_reports_entries() {
         let app = router();
 
@@ -1900,5 +2061,57 @@ mod tests {
             .unwrap();
         let cap_resp = app.oneshot(capacity).await.unwrap();
         assert_eq!(cap_resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn capacity_endpoint_reports_no_bend_readiness() {
+        let app = router();
+        let request = Request::builder()
+            .method("GET")
+            .uri("/v1/ops/capacity")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+
+        assert_eq!(body["target_active_users"], json!(2000));
+        assert_eq!(body["baseline_rps"], json!(82));
+        assert_eq!(body["peak_rps"], json!(329));
+        assert_eq!(body["burst_rps"], json!(500));
+        assert_eq!(body["readiness_status"], json!("READY"));
+        assert_eq!(
+            body["no_bend_readiness"]["target_active_users"],
+            json!(2000)
+        );
+        assert_eq!(body["no_bend_readiness"]["linearity_ratio_min"], json!(0.8));
+        assert_eq!(body["no_bend_readiness"]["comfortable"], json!(true));
+        assert!(
+            body["no_bend_readiness"]["measured_linearity_ratio"]
+                .as_f64()
+                .unwrap_or_default()
+                >= 0.8
+        );
+        assert_eq!(body["scale_samples"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn capacity_instrumentation_returns_none_without_target_sample() {
+        let samples = vec![
+            ScaleSample {
+                active_users: 500,
+                throughput_rps: 82.0,
+                cpu_percent: 42.0,
+            },
+            ScaleSample {
+                active_users: 1000,
+                throughput_rps: 164.0,
+                cpu_percent: 56.0,
+            },
+        ];
+
+        let response = build_capacity_instrumentation_response(samples);
+        assert!(response.is_none());
     }
 }

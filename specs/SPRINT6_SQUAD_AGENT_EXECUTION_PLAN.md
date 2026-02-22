@@ -27,7 +27,7 @@ Verified Sprint 5 baseline input:
 | Finance | C/J | Final Finance board closeout, dual-book pilot close package, and go-live cutover reconciliation pack |
 | Integration | D/E/I | Pilot cutover readiness for Inntopia/Square + Stripe, rollback runbooks, and controlled replay backlogs |
 | Controls&Sec | H | Final control attestations, incident-response control drills, and release-control signoff enforcement |
-| Data/Reconciliation | F/G | Pilot close monitoring dashboards, exception-burn-down controls, and post-cutover evidence exports |
+| Data/Reconciliation | F/G | Pilot close monitoring dashboards, exception-burn-down controls, and post-cutover evidence exports per `specs/SPRINT6_CUTOVER_MONITORING_CONTRACT.md` |
 | QA/Release | Cross-epic release gates | Final UAT/performance certification, release rehearsal, and go/no-go recommendation |
 
 ## 3. Per-Member Work Plan
@@ -135,7 +135,7 @@ Accepted corrections for Sprint 6:
 | Finance | Dual-book cutover package | Tie-out comparators, signoff matrices, disclosure acceptance evidence |
 | Integration | Connector/payment cutover and rollback readiness | Replay/backfill rehearsal tools, recovery validation suites |
 | Controls&Sec | Final control attestations | OPA suites, incident drill evidence validators, release checklist checks |
-| Data | Post-cutover monitoring + exports | Reconciliation trend jobs, SLA dashboards, compliance export validators |
+| Data | Post-cutover monitoring + exports | Reconciliation trend jobs, SLA dashboards, compliance export validators + post-cutover snapshot gating |
 | QA/Release | Final UAT/perf/release rehearsal | End-to-end suites, perf certification runs, release gate dashboards |
 
 ## 10. Sprint 6 Exit Gate (Authoritative)
@@ -145,7 +145,16 @@ Sprint 6 exits only if all pass:
 3. Cutover rehearsal completes with validated rollback and replay checkpoints.
 4. Finance dual-book close package and disclosure acceptance are fully approved.
 5. Controls attestation bundle (tamper/access/PCI/release controls) is complete and approved.
-6. Post-cutover reconciliation/export monitoring is active and validated.
+6. Post-cutover reconciliation/export monitoring is active and validated per `specs/SPRINT6_CUTOVER_MONITORING_CONTRACT.md`.
 7. CI gates remain green for contracts, code, controls, and release evidence checks.
 8. Finance and Controls approvals are complete for all flagged Sprint 6 decisions.
 9. Final architect go/no-go packet is published and signed.
+
+## 11. Sprint 6 Artifact Set (Execution + Governance)
+Required Sprint 6 artifacts for deterministic release evidence:
+1. `governance/sprint6_signoff_packet.md`
+2. `governance/SPRINT6_PLAN_COMPLETION_REPORT.md`
+3. `qa/SPRINT6_GATE_REPORT.md`
+4. `specs/SPRINT6_CUTOVER_MONITORING_CONTRACT.md`
+5. `finance/US_CA_FINANCE_EVIDENCE_CHECKLIST_V1.md` (Sprint 6 section)
+6. `governance/impact_decisions.json` (`DEC-009`..`DEC-014` approvals)

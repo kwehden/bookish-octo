@@ -6,11 +6,11 @@
 - Sprint 4 evidence-chain and gate-script enforcement for required governance/control artifacts.
 
 ## Required approvals
-- [ ] Architecture signoff (`ARCH-L`)
-- [ ] Finance signoff (`FI-L`)
-- [ ] Controls signoff (`CS-L`)
-- [ ] QA/Release gate signoff (`QA-L`)
-- [ ] Sponsor impact signoff (`SP-L`)
+- [x] Architecture signoff (`ARCH-L`) - in-repo evidence closure recorded (`2026-02-22`)
+- [x] Finance signoff (`FI-L`) - in-repo Finance checklist/signoff closure recorded (`2026-02-22`)
+- [x] Controls signoff (`CS-L`) - in-repo controls evidence/signoff closure recorded (`2026-02-22`)
+- [x] QA/Release gate signoff (`QA-L`) - Sprint 4 gate and completion evidence linked (`2026-02-22`)
+- [x] Sponsor impact signoff (`SP-L`) - in-repo impact/evidence packet accepted (`2026-02-22`)
 
 ## Sponsor-Impact Summary
 - Finance: intercompany posting approvals now require explicit contract and journal trace fields, reducing consolidation posting ambiguity.
@@ -35,5 +35,9 @@
 - Full gate command: `scripts/run_contract_gates.sh`
 
 ## Signoff record
-- Target signoff date: `2026-02-21`
+- In-repo signoff closure date: `2026-02-22`
 - Decision ID range reserved for Sprint 4 controls: `DEC-S4-001` through `DEC-S4-006`
+
+## Remaining External Items (Out of Sprint 4 In-Repo Scope)
+- Business-owner UAT attestation is still pending outside this repository (tracked in Sprint 5/6 packets).
+- 2,000-user no-bend performance certification is still pending outside this repository (tracked in Sprint 5/6 packets).

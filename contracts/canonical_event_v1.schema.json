@@ -30,7 +30,19 @@
     "tenant_id": { "type": "string" },
     "legal_entity_id": { "type": "string" },
     "idempotency_key": { "type": "string" },
-    "payload": { "type": "object" }
+    "payload": { "type": "object" },
+    "trace_context": {
+      "type": "object",
+      "properties": {
+        "idempotency_key": { "type": "string" },
+        "correlation_id": { "type": "string" },
+        "causation_id": { "type": ["string", "null"] },
+        "traceparent": { "type": ["string", "null"] },
+        "tracestate": { "type": ["string", "null"] }
+      },
+      "required": ["idempotency_key", "correlation_id"],
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

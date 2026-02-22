@@ -576,3 +576,90 @@ test_deny_legal_hold_override_finance_operator if {
     }
   }
 }
+
+# Allowed: release-control signoff requires explicit Sprint 6 control context with PASS outcome
+test_allow_release_control_signoff_with_required_fields if {
+  allow with input as {
+    "action": "release_control_signoff",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "release_id": "REL-2026-02-22-S6",
+      "release_checklist_ref": "controls/RELEASE_CONTROL_CHECKLIST_V1.md",
+      "incident_drill_report_ref": "controls/INCIDENT_RESPONSE_DRILL_REPORT_V1.md",
+      "signoff_ticket_id": "RFC-2026-0201",
+      "signoff_owner": "CS-L",
+      "control_gate_result": "PASS"
+    }
+  }
+}
+
+# Denied: release-control signoff requires incident drill evidence reference
+test_deny_release_control_signoff_missing_drill_report_ref if {
+  not allow with input as {
+    "action": "release_control_signoff",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "release_id": "REL-2026-02-22-S6",
+      "release_checklist_ref": "controls/RELEASE_CONTROL_CHECKLIST_V1.md",
+      "incident_drill_report_ref": "",
+      "signoff_ticket_id": "RFC-2026-0202",
+      "signoff_owner": "CS-L",
+      "control_gate_result": "PASS"
+    }
+  }
+}
+
+# Denied: release-control signoff requires explicit PASS gate result
+test_deny_release_control_signoff_non_pass_result if {
+  not allow with input as {
+    "action": "release_control_signoff",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "release_id": "REL-2026-02-22-S6",
+      "release_checklist_ref": "controls/RELEASE_CONTROL_CHECKLIST_V1.md",
+      "incident_drill_report_ref": "controls/INCIDENT_RESPONSE_DRILL_REPORT_V1.md",
+      "signoff_ticket_id": "RFC-2026-0203",
+      "signoff_owner": "CS-L",
+      "control_gate_result": "FAIL"
+    }
+  }
+}
+
+# Denied: finance operator cannot perform release-control signoff
+test_deny_release_control_signoff_finance_operator if {
+  not allow with input as {
+    "action": "release_control_signoff",
+    "subject": {"role": "finance_operator", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "release_id": "REL-2026-02-22-S6",
+      "release_checklist_ref": "controls/RELEASE_CONTROL_CHECKLIST_V1.md",
+      "incident_drill_report_ref": "controls/INCIDENT_RESPONSE_DRILL_REPORT_V1.md",
+      "signoff_ticket_id": "RFC-2026-0204",
+      "signoff_owner": "CS-L",
+      "control_gate_result": "PASS"
+    }
+  }
+}
+
+# Denied: break-glass cannot bypass SoD on release-control signoff
+test_deny_break_glass_on_release_control_signoff if {
+  not allow with input as {
+    "action": "release_control_signoff",
+    "subject": {"role": "finance_approver", "legal_entity_id": "US_CO_01"},
+    "resource": {
+      "legal_entity_id": "US_CO_01",
+      "release_id": "REL-2026-02-22-S6",
+      "release_checklist_ref": "controls/RELEASE_CONTROL_CHECKLIST_V1.md",
+      "incident_drill_report_ref": "controls/INCIDENT_RESPONSE_DRILL_REPORT_V1.md",
+      "signoff_ticket_id": "RFC-2026-0205",
+      "signoff_owner": "CS-L",
+      "control_gate_result": "PASS"
+    },
+    "request_time_ns": 1700003600000000000,
+    "break_glass": valid_break_glass
+  }
+}

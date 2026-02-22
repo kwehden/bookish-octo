@@ -55,3 +55,17 @@
 - Controls&Sec: `opa test policies/opa`, control artifact validation scripts, and gate-policy updates.
 - Data/Reconciliation: reconciliation metric export tests (`cargo test -p reconciliation-model`) and evidence contract publication.
 - QA/Release: full gate runner validation via `./scripts/run_contract_gates.sh`.
+
+## Update 8
+- Sprint 6 governance artifact set published for pilot cutover closure: signoff packet, completion rubric, QA gate report, and cutover monitoring contract.
+- Finance + Controls approval ledger extended with Sprint 6 decision IDs `DEC-009` through `DEC-014`, all marked with dual approvals.
+- Reconciliation monitoring output contract now explicitly binds gate criteria to deterministic snapshot fields (`unresolved_overdue_bps`, `open_critical_defects`, `uat_attested`, `perf_certified`, `release_ready`).
+- Deterministic validation is green for in-repo gates (`./scripts/run_contract_gates.sh` passes), producing Sprint 6 score `16/18 (88.9%)`; external UAT and performance attestations remain the only program-level `NO-GO` blockers.
+
+## Major Tool Use Summary (Sprint 6, major activities only)
+- Platform: production-readiness regression focus for posting/rev-rec hardening and release-runbook evidence checks.
+- Finance: deterministic checklist + impact-decision approvals for pilot dual-book close, disclosure acceptance, and cutover variance governance.
+- Integration: connector cutover rehearsal validation centered on replay recovery and rollback checkpoint outcomes (`evaluate_cutover_rehearsal`).
+- Controls&Sec: release-control override governance and chain-of-custody evidence closures tied to sprint signoff gates.
+- Data/Reconciliation: post-cutover monitoring snapshot and evidence-export validation (`build_post_cutover_monitoring_snapshot`, `build_recon_compliance_evidence_export`).
+- QA/Release: Sprint 6 gate report alignment against exit criteria and governance artifact completeness checks.

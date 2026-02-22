@@ -1,6 +1,6 @@
 # Sprint 4 Gate Report (Data/Reconciliation Baseline)
 
-Last updated: February 21, 2026  
+Last updated: February 22, 2026  
 Scope focus: Data/Reconciliation + QA owned Sprint 4 close-checklist and dry-run artifacts
 
 ## Gate status snapshot
@@ -10,8 +10,9 @@ Scope focus: Data/Reconciliation + QA owned Sprint 4 close-checklist and dry-run
 - [x] Test coverage added for dependency-state transitions.
 - [x] Test coverage added for authorization-neutral behavior.
 - [x] Test coverage added for dry-run pass/fail outcomes.
-- [ ] Cross-squad elimination/FX and period-lock authorization gate evidence remains joint ownership.
-- [ ] Finance + Controls final approval closures remain external to owned artifacts.
+- [x] Finance + Controls in-repo approval and evidence closures are linked in Sprint 4 governance artifacts.
+- [ ] Cross-squad elimination/FX integration evidence remains joint ownership (non-owned in this report).
+- [ ] External UAT/performance attestations remain outside this repository (tracked in Sprint 5/6 packets).
 
 ## Evidence links
 - Reconciliation model updates + tests: `crates/reconciliation-model/src/lib.rs`
@@ -26,4 +27,4 @@ Mapped to `specs/SPRINT4_SQUAD_AGENT_EXECUTION_PLAN.md`:
 
 ## Notes
 - This report is an owned-scope baseline and does not assert complete cross-squad Sprint 4 exit closure.
-- Final Sprint 4 go/no-go requires integrated evidence for elimination, FX translation, period-lock authorization, and board approvals.
+- Final program production go/no-go remains blocked by external Sprint 5/6 attestations (business-owner UAT and 2,000-user no-bend performance certification).
