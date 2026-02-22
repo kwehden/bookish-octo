@@ -4,17 +4,21 @@ from pathlib import Path
 
 
 REQUIRED_SNIPPETS = {
-    "controls/TAMPER_SEALING_VERIFICATION_V1.md": [
+    "controls/RELEASE_CONTROL_CHECKLIST_V1.md": [
         "Status: PASS",
-        "seal_chain_verified: true",
+        "## Sprint 6 Release Control Signoff",
+        "## Pass/Fail Gate Results",
+        "control_gate_result: PASS",
     ],
-    "controls/ACCESS_REVIEW_REPORTING_V1.md": [
+    "controls/INCIDENT_RESPONSE_DRILL_REPORT_V1.md": [
         "Status: PASS",
-        "review_attestation_complete: true",
+        "## Drill Scenario",
+        "## Pass/Fail Outcome",
+        "drill_gate_result: PASS",
     ],
-    "controls/PCI_SCOPE_CONTROL_OWNERSHIP_MATRIX_V1.md": [
-        "Status: PASS",
-        "ownership_signoff_complete: true",
+    "controls/CONTROL_GATES_REGISTER_V1.md": [
+        "## Sprint 6 Status",
+        "release_control_signoff",
     ],
 }
 
@@ -35,4 +39,4 @@ for path, snippets in REQUIRED_SNIPPETS.items():
         if snippet not in content:
             fail(f"missing required snippet '{snippet}' in {path}")
 
-print("sprint5 controls evidence check passed")
+print("sprint6 controls evidence check passed")

@@ -14,6 +14,9 @@ enum SquareEventKind {
     Refund,
     Tender,
     Payout,
+    DisputeOpened,
+    DisputeWon,
+    DisputeLost,
 }
 
 impl SquareEventKind {
@@ -23,6 +26,9 @@ impl SquareEventKind {
             Self::Refund => "refund.v1",
             Self::Tender => "payment.settled.v1",
             Self::Payout => "payout.cleared.v1",
+            Self::DisputeOpened => "dispute.opened.v1",
+            Self::DisputeWon => "dispute.won.v1",
+            Self::DisputeLost => "dispute.lost.v1",
         }
     }
 
@@ -32,6 +38,9 @@ impl SquareEventKind {
             Self::Refund => "refund",
             Self::Tender => "tender",
             Self::Payout => "payout",
+            Self::DisputeOpened => "dispute_opened",
+            Self::DisputeWon => "dispute_won",
+            Self::DisputeLost => "dispute_lost",
         }
     }
 }
@@ -54,11 +63,6 @@ impl ConnectorAdapter for SquareAdapter {
             &["/tenant_id", "/data/object/tenant_id"],
             "tenant_id",
         )?;
-        let legal_entity_id = required_string(
-            &payload,
-            &["/legal_entity_id", "/data/object/legal_entity_id"],
-            "legal_entity_id",
-        )?;
         let location_id = required_string(
             &payload,
             &[
@@ -70,12 +74,21 @@ impl ConnectorAdapter for SquareAdapter {
             ],
             "location_id",
         )?;
+        let legal_entity_id = first_string(
+            &payload,
+            &["/legal_entity_id", "/data/object/legal_entity_id"],
+        )
+        .or_else(|| default_legal_entity_for_location(&location_id).map(ToString::to_string))
+        .ok_or_else(|| ConnectorError::Normalize("missing field `legal_entity_id`".to_string()))?;
         let kind = detect_event_kind(&payload)?;
         let canonical_payload = match kind {
             SquareEventKind::Sale => normalize_sale(&payload, occurred_at)?,
             SquareEventKind::Refund => normalize_refund(&payload, occurred_at)?,
             SquareEventKind::Tender => normalize_tender(&payload, occurred_at)?,
             SquareEventKind::Payout => normalize_payout(&payload, occurred_at)?,
+            SquareEventKind::DisputeOpened => normalize_dispute(&payload, occurred_at, "OPENED")?,
+            SquareEventKind::DisputeWon => normalize_dispute(&payload, occurred_at, "WON")?,
+            SquareEventKind::DisputeLost => normalize_dispute(&payload, occurred_at, "LOST")?,
         };
         let canonical_payload =
             with_routing_context(canonical_payload, &legal_entity_id, &location_id);
@@ -100,17 +113,20 @@ impl ConnectorAdapter for SquareAdapter {
             ],
         )
         .unwrap_or_else(|| source_event_id.clone());
+        let business_date = first_string(&canonical_payload, &["/business_date", "/payout_date"])
+            .unwrap_or_else(|| occurred_at.format("%Y-%m-%d").to_string());
+        let idempotency_key = first_string(
+            &canonical_payload,
+            &[
+                "/extensions/source_payload/idempotency_key",
+                "/extensions/source_payload/metadata/idempotency_key",
+                "/extensions/source_payload/request/idempotency_key",
+            ],
+        )
+        .unwrap_or_else(|| format!("square:{source_event_id}:{}", kind.idempotency_suffix()));
 
         let trace_context = CanonicalTraceContext {
-            idempotency_key: first_string(
-                &canonical_payload,
-                &[
-                    "/extensions/source_payload/idempotency_key",
-                    "/extensions/source_payload/metadata/idempotency_key",
-                    "/extensions/source_payload/request/idempotency_key",
-                ],
-            )
-            .unwrap_or_else(|| format!("square:{source_event_id}:{}", kind.idempotency_suffix())),
+            idempotency_key: idempotency_key.clone(),
             correlation_id,
             causation_id: first_string(
                 &canonical_payload,
@@ -143,8 +159,11 @@ impl ConnectorAdapter for SquareAdapter {
             schema_version: "1.0.0".to_string(),
             source_system: self.source_system().to_string(),
             source_event_id,
+            occurred_at,
+            business_date,
             tenant_id,
             legal_entity_id,
+            idempotency_key,
             payload: canonical_payload,
             trace_context,
         })
@@ -172,6 +191,14 @@ fn with_routing_context(
     canonical_payload
 }
 
+fn default_legal_entity_for_location(location_id: &str) -> Option<&'static str> {
+    match location_id {
+        "BRECK_BASE_AREA" | "VAIL_BASE_LODGE" => Some("US_CO_01"),
+        "WHISTLER_VILLAGE" | "BLACKCOMB_BASE" => Some("CA_BC_01"),
+        _ => None,
+    }
+}
+
 fn detect_event_kind(payload: &Value) -> Result<SquareEventKind, ConnectorError> {
     if let Some(kind) = first_string(
         payload,
@@ -188,6 +215,15 @@ fn detect_event_kind(payload: &Value) -> Result<SquareEventKind, ConnectorError>
         let normalized = kind.to_ascii_lowercase();
         if normalized.contains("refund") {
             return Ok(SquareEventKind::Refund);
+        }
+        if normalized.contains("dispute") {
+            if normalized.contains("won") {
+                return Ok(SquareEventKind::DisputeWon);
+            }
+            if normalized.contains("lost") {
+                return Ok(SquareEventKind::DisputeLost);
+            }
+            return Ok(SquareEventKind::DisputeOpened);
         }
         if normalized.contains("payout") {
             return Ok(SquareEventKind::Payout);
@@ -212,6 +248,9 @@ fn detect_event_kind(payload: &Value) -> Result<SquareEventKind, ConnectorError>
         ],
     ) {
         return Ok(SquareEventKind::Payout);
+    }
+    if has_any(payload, &["/dispute_id", "/data/object/dispute_id"]) {
+        return Ok(SquareEventKind::DisputeOpened);
     }
     if has_any(payload, &["/refund_id", "/data/object/refund_id"]) {
         return Ok(SquareEventKind::Refund);
@@ -448,6 +487,57 @@ fn normalize_payout(payload: &Value, occurred_at: DateTime<Utc>) -> Result<Value
     }))
 }
 
+fn normalize_dispute(
+    payload: &Value,
+    occurred_at: DateTime<Utc>,
+    dispute_status: &str,
+) -> Result<Value, ConnectorError> {
+    let dispute_id = required_string(
+        payload,
+        &[
+            "/dispute_id",
+            "/id",
+            "/data/object/dispute_id",
+            "/data/object/id",
+        ],
+        "dispute_id",
+    )?;
+    let amount_minor = required_amount(
+        payload,
+        &[
+            "/amount_minor",
+            "/disputed_amount_minor",
+            "/amount_money/amount",
+            "/data/object/amount_minor",
+            "/data/object/amount_money/amount",
+        ],
+        "amount_minor",
+    )?;
+    let currency = first_string(
+        payload,
+        &[
+            "/currency",
+            "/amount_money/currency",
+            "/data/object/currency",
+            "/data/object/amount_money/currency",
+        ],
+    )
+    .unwrap_or_else(|| "USD".to_string());
+
+    Ok(json!({
+        "dispute_id": dispute_id,
+        "payment_id": first_string(payload, &["/payment_id", "/data/object/payment_id"]),
+        "dispute_status": dispute_status,
+        "business_date": first_date_string(payload, &["/business_date", "/data/object/business_date", "/created_at", "/data/object/created_at"])
+            .unwrap_or_else(|| occurred_at.format("%Y-%m-%d").to_string()),
+        "currency": currency,
+        "amount_minor": amount_minor,
+        "extensions": {
+            "source_payload": payload
+        }
+    }))
+}
+
 fn required_string(
     payload: &Value,
     pointers: &[&str],
@@ -512,7 +602,10 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use crate::{run_replay_backfill_resiliency, ConnectorAdapter, RawEvent};
+    use crate::{
+        evaluate_cutover_rehearsal, run_replay_backfill_resiliency, ConnectorAdapter,
+        CutoverCheckpoint, RawEvent,
+    };
 
     use super::SquareAdapter;
 
@@ -549,6 +642,11 @@ mod tests {
             canonical.trace_context.idempotency_key,
             "square:idem:sale".to_string()
         );
+        assert_eq!(canonical.idempotency_key, "square:idem:sale");
+        assert_eq!(
+            canonical.business_date,
+            canonical.payload["business_date"].as_str().unwrap()
+        );
         assert_eq!(canonical.trace_context.correlation_id, "corr_sale");
         assert!(canonical.trace_context.traceparent.is_some());
     }
@@ -579,6 +677,122 @@ mod tests {
             canonical.trace_context.idempotency_key,
             "square:sq_evt_refund_1:refund"
         );
+        assert_eq!(canonical.idempotency_key, "square:sq_evt_refund_1:refund");
+    }
+
+    #[tokio::test]
+    async fn enriches_legal_entity_from_location_when_missing() {
+        let adapter = SquareAdapter;
+        let raw = crate::RawEvent {
+            source_event_id: "sq_evt_sale_legal_fallback".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "type": "payment.created",
+                "tenant_id": "tenant_1",
+                "location_id": "WHISTLER_VILLAGE",
+                "order_id": "ord_124",
+                "amount_money": {"amount": 14500, "currency": "CAD"}
+            }),
+        };
+
+        let canonical = adapter.normalize(raw).await.unwrap();
+        assert_eq!(canonical.legal_entity_id, "CA_BC_01");
+        assert_eq!(
+            canonical.payload["routing"]["legal_entity_id"],
+            json!("CA_BC_01")
+        );
+    }
+
+    #[tokio::test]
+    async fn normalize_fails_when_legal_entity_missing_and_location_unknown() {
+        let adapter = SquareAdapter;
+        let raw = crate::RawEvent {
+            source_event_id: "sq_evt_sale_unknown_location".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "type": "payment.created",
+                "tenant_id": "tenant_1",
+                "location_id": "MYSTERY_MOUNTAIN",
+                "order_id": "ord_127",
+                "amount_money": {"amount": 17120, "currency": "USD"}
+            }),
+        };
+
+        let error = adapter.normalize(raw).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "normalization failed: missing field `legal_entity_id`"
+        );
+    }
+
+    #[tokio::test]
+    async fn normalizes_square_dispute_opened() {
+        let adapter = SquareAdapter;
+        let raw = crate::RawEvent {
+            source_event_id: "sq_evt_dispute_1".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "event_type": "dispute.opened",
+                "tenant_id": "tenant_1",
+                "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
+                "dispute_id": "dp_1",
+                "payment_id": "pay_1",
+                "amount_minor": 2500,
+                "currency": "USD"
+            }),
+        };
+
+        let canonical = adapter.normalize(raw).await.unwrap();
+        assert_eq!(canonical.event_type, "dispute.opened.v1");
+        assert_eq!(canonical.payload["dispute_id"], json!("dp_1"));
+        assert_eq!(canonical.payload["dispute_status"], json!("OPENED"));
+    }
+
+    #[tokio::test]
+    async fn normalizes_square_dispute_won() {
+        let adapter = SquareAdapter;
+        let raw = crate::RawEvent {
+            source_event_id: "sq_evt_dispute_2".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "event_type": "dispute.won",
+                "tenant_id": "tenant_1",
+                "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
+                "dispute_id": "dp_2",
+                "payment_id": "pay_2",
+                "amount_minor": 1800,
+                "currency": "USD"
+            }),
+        };
+
+        let canonical = adapter.normalize(raw).await.unwrap();
+        assert_eq!(canonical.event_type, "dispute.won.v1");
+        assert_eq!(canonical.payload["dispute_status"], json!("WON"));
+    }
+
+    #[tokio::test]
+    async fn normalizes_square_dispute_lost() {
+        let adapter = SquareAdapter;
+        let raw = crate::RawEvent {
+            source_event_id: "sq_evt_dispute_3".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "event_type": "dispute.lost",
+                "tenant_id": "tenant_1",
+                "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
+                "dispute_id": "dp_3",
+                "payment_id": "pay_3",
+                "amount_minor": 3100,
+                "currency": "USD"
+            }),
+        };
+
+        let canonical = adapter.normalize(raw).await.unwrap();
+        assert_eq!(canonical.event_type, "dispute.lost.v1");
+        assert_eq!(canonical.payload["dispute_status"], json!("LOST"));
     }
 
     #[tokio::test]
@@ -714,5 +928,38 @@ mod tests {
         assert_eq!(result.telemetry.first_attempt_failures, 1);
         assert_eq!(result.telemetry.recovered_events, 1);
         assert!(result.telemetry.objective_met);
+    }
+
+    #[tokio::test]
+    async fn cutover_rehearsal_passes_for_square_when_all_checkpoints_pass() {
+        let adapter = SquareAdapter;
+        let events = vec![RawEvent {
+            source_event_id: "sq_evt_sale_950".to_string(),
+            occurred_at: Utc::now(),
+            payload: json!({
+                "type": "payment.created",
+                "tenant_id": "tenant_1",
+                "legal_entity_id": "US_CO_01",
+                "location_id": "BRECK_BASE_AREA",
+                "order_id": "ord_950",
+                "amount_money": {"amount": 8800, "currency": "USD"}
+            }),
+        }];
+
+        let replay = run_replay_backfill_resiliency(&adapter, &events, &BTreeSet::new(), 1000, 150)
+            .await
+            .unwrap();
+        let rehearsal = evaluate_cutover_rehearsal(
+            &replay,
+            true,
+            &[CutoverCheckpoint {
+                name: "square_cutover_dry_run".to_string(),
+                passed: true,
+            }],
+        );
+
+        assert!(rehearsal.passed);
+        assert!(rehearsal.replay_objective_met);
+        assert!(rehearsal.rollback_validated);
     }
 }

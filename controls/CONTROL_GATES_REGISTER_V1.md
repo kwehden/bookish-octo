@@ -39,3 +39,11 @@ All gates are release/merge blockers in Sprint 1 when impacted.
 - G3: Policy regression gate - `Expanded` (OPA suite extended for tamper sealing, access-review, PCI scope updates, and legal-hold override contexts)
 - G4: Evidence chain gate - `Expanded` (tamper-sealing verification, access-review report, and PCI ownership matrix added as required evidence artifacts)
 - G5: Stage control activation gate - `Expanded` (gate script enforces Sprint 5 signoff/completion/QA artifacts and Sprint 5 section checks)
+
+## Sprint 6 Status
+
+- G1: Entity boundary gate - `Active` (release-control signoff authorization remains legal-entity scoped)
+- G2: SoD baseline gate - `Expanded` (new `release_control_signoff` action is non-bypassable and denies finance-operator execution)
+- G3: Policy regression gate - `Expanded` (OPA tests added for required release signoff context fields and explicit PASS outcome validation)
+- G4: Evidence chain gate - `Expanded` (Sprint 6 release checklist and incident drill report are required control artifacts with PASS markers)
+- G5: Stage control activation gate - `Expanded` (gate scripts enforce Sprint 6 artifacts/headings and `validate_sprint6_controls.py` as hard blockers)

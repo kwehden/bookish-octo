@@ -8,8 +8,10 @@ use thiserror::Error;
 
 pub mod inntopia;
 pub mod square;
+pub mod stripe;
 pub use inntopia::InntopiaAdapter;
 pub use square::SquareAdapter;
+pub use stripe::StripeAdapter;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RawEvent {
@@ -34,8 +36,11 @@ pub struct CanonicalEvent {
     pub schema_version: String,
     pub source_system: String,
     pub source_event_id: String,
+    pub occurred_at: DateTime<Utc>,
+    pub business_date: String,
     pub tenant_id: String,
     pub legal_entity_id: String,
+    pub idempotency_key: String,
     pub payload: Value,
     pub trace_context: CanonicalTraceContext,
 }
@@ -62,6 +67,20 @@ pub struct ReplayBackfillTelemetry {
 pub struct ReplayBackfillResult {
     pub hashes: Vec<String>,
     pub telemetry: ReplayBackfillTelemetry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CutoverCheckpoint {
+    pub name: String,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CutoverRehearsalResult {
+    pub checkpoint_results: Vec<CutoverCheckpoint>,
+    pub replay_objective_met: bool,
+    pub rollback_validated: bool,
+    pub passed: bool,
 }
 
 #[async_trait]
@@ -131,6 +150,32 @@ pub async fn run_replay_backfill_resiliency<A: ConnectorAdapter + Sync>(
     Ok(ReplayBackfillResult { hashes, telemetry })
 }
 
+pub fn evaluate_cutover_rehearsal(
+    replay_result: &ReplayBackfillResult,
+    rollback_validated: bool,
+    additional_checkpoints: &[CutoverCheckpoint],
+) -> CutoverRehearsalResult {
+    let mut checkpoints = vec![
+        CutoverCheckpoint {
+            name: "replay_recovery_objective".to_string(),
+            passed: replay_result.telemetry.objective_met,
+        },
+        CutoverCheckpoint {
+            name: "rollback_checkpoint".to_string(),
+            passed: rollback_validated,
+        },
+    ];
+    checkpoints.extend_from_slice(additional_checkpoints);
+    let passed = checkpoints.iter().all(|checkpoint| checkpoint.passed);
+
+    CutoverRehearsalResult {
+        checkpoint_results: checkpoints,
+        replay_objective_met: replay_result.telemetry.objective_met,
+        rollback_validated,
+        passed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,14 +190,18 @@ mod tests {
         }
 
         async fn normalize(&self, raw: RawEvent) -> Result<CanonicalEvent, ConnectorError> {
+            let business_date = raw.occurred_at.format("%Y-%m-%d").to_string();
             Ok(CanonicalEvent {
                 event_id: format!("canon-{}", raw.source_event_id),
                 event_type: "order.captured.v1".to_string(),
                 schema_version: "1.0.0".to_string(),
                 source_system: self.source_system().to_string(),
                 source_event_id: raw.source_event_id,
+                occurred_at: raw.occurred_at,
+                business_date,
                 tenant_id: "tenant_1".to_string(),
                 legal_entity_id: "US_CO_01".to_string(),
+                idempotency_key: "fake:evt_1".to_string(),
                 payload: raw.payload,
                 trace_context: CanonicalTraceContext {
                     idempotency_key: "fake:evt_1".to_string(),
@@ -209,5 +258,57 @@ mod tests {
         assert_eq!(result.telemetry.failed_events, 0);
         assert_eq!(result.telemetry.simulated_recovery_time_ms, 250);
         assert!(result.telemetry.objective_met);
+    }
+
+    #[test]
+    fn cutover_rehearsal_fails_when_checkpoint_fails() {
+        let replay = ReplayBackfillResult {
+            hashes: vec!["h1".to_string()],
+            telemetry: ReplayBackfillTelemetry {
+                total_events: 1,
+                total_attempts: 1,
+                first_attempt_failures: 0,
+                recovered_events: 0,
+                failed_events: 0,
+                simulated_recovery_time_ms: 100,
+                recovery_target_ms: 1000,
+                objective_met: true,
+            },
+        };
+        let result = evaluate_cutover_rehearsal(
+            &replay,
+            true,
+            &[CutoverCheckpoint {
+                name: "stripe_cutover_dry_run".to_string(),
+                passed: false,
+            }],
+        );
+        assert!(!result.passed);
+    }
+
+    #[test]
+    fn cutover_rehearsal_passes_when_all_checkpoints_pass() {
+        let replay = ReplayBackfillResult {
+            hashes: vec!["h1".to_string()],
+            telemetry: ReplayBackfillTelemetry {
+                total_events: 1,
+                total_attempts: 1,
+                first_attempt_failures: 0,
+                recovered_events: 0,
+                failed_events: 0,
+                simulated_recovery_time_ms: 100,
+                recovery_target_ms: 1000,
+                objective_met: true,
+            },
+        };
+        let result = evaluate_cutover_rehearsal(
+            &replay,
+            true,
+            &[CutoverCheckpoint {
+                name: "square_cutover_dry_run".to_string(),
+                passed: true,
+            }],
+        );
+        assert!(result.passed);
     }
 }

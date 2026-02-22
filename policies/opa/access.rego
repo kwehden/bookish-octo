@@ -61,6 +61,7 @@ tamper_log_seal_action if { input.action == "tamper_log_seal" }
 access_review_export_action if { input.action == "access_review_export" }
 pci_scope_update_action if { input.action == "pci_scope_update" }
 legal_hold_override_action if { input.action == "legal_hold_override" }
+release_control_signoff_action if { input.action == "release_control_signoff" }
 
 non_bypassable_sod_action if posting_action
 non_bypassable_sod_action if posting_approval_action
@@ -73,6 +74,7 @@ non_bypassable_sod_action if estimate_change_action
 non_bypassable_sod_action if dispute_approval_action
 non_bypassable_sod_action if tamper_log_seal_action
 non_bypassable_sod_action if access_review_export_action
+non_bypassable_sod_action if release_control_signoff_action
 
 critical_action if non_bypassable_sod_action
 critical_action if period_lock_action
@@ -233,6 +235,27 @@ legal_hold_override_context_valid if {
   override_reason != ""
 }
 
+release_control_signoff_context_valid if {
+  not release_control_signoff_action
+}
+
+release_control_signoff_context_valid if {
+  release_control_signoff_action
+  resource := object.get(input, "resource", {})
+  release_id := object.get(resource, "release_id", "")
+  release_checklist_ref := object.get(resource, "release_checklist_ref", "")
+  incident_drill_report_ref := object.get(resource, "incident_drill_report_ref", "")
+  signoff_ticket_id := object.get(resource, "signoff_ticket_id", "")
+  signoff_owner := object.get(resource, "signoff_owner", "")
+  control_gate_result := object.get(resource, "control_gate_result", "")
+  release_id != ""
+  release_checklist_ref != ""
+  incident_drill_report_ref != ""
+  signoff_ticket_id != ""
+  signoff_owner != ""
+  control_gate_result == "PASS"
+}
+
 break_glass_requested if {
   object.get(object.get(input, "break_glass", {}), "enabled", false)
 }
@@ -320,4 +343,5 @@ allow if {
   access_review_export_context_valid
   pci_scope_update_context_valid
   legal_hold_override_context_valid
+  release_control_signoff_context_valid
 }
