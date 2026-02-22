@@ -132,6 +132,29 @@ pub struct ReconRunResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DisputeAgingBucket {
+    pub bucket: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnresolvedSlaMetrics {
+    pub total_open: u32,
+    pub overdue: u32,
+    pub on_track: u32,
+    pub overdue_rate_bps: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconComplianceEvidenceExport {
+    pub run_id: String,
+    pub generated_at: DateTime<Utc>,
+    pub dispute_aging: Vec<DisputeAgingBucket>,
+    pub unresolved_sla: UnresolvedSlaMetrics,
+    pub owner_queue_counts: BTreeMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReconException {
     pub exception_id: String,
     pub exception_type: String,
@@ -469,6 +492,83 @@ pub fn reconcile_v1(input: &ReconRunInput) -> ReconRunResult {
             auto_match_rate_bps: ratio_to_bps(auto_matched, total_candidates),
             routed_exception_rate_bps: ratio_to_bps(routed_exceptions, non_auto_candidates),
         },
+    }
+}
+
+pub fn dispute_aging_buckets(
+    exception_queue: &[ReconExceptionQueueItem],
+    as_of: DateTime<Utc>,
+) -> Vec<DisputeAgingBucket> {
+    let mut counts = [0_u32; 4];
+    for item in exception_queue {
+        let age_hours = (as_of - item.opened_at).num_hours().max(0);
+        if age_hours < 4 {
+            counts[0] += 1;
+        } else if age_hours < 8 {
+            counts[1] += 1;
+        } else if age_hours < 24 {
+            counts[2] += 1;
+        } else {
+            counts[3] += 1;
+        }
+    }
+
+    vec![
+        DisputeAgingBucket {
+            bucket: "0-4h".to_string(),
+            count: counts[0],
+        },
+        DisputeAgingBucket {
+            bucket: "4-8h".to_string(),
+            count: counts[1],
+        },
+        DisputeAgingBucket {
+            bucket: "8-24h".to_string(),
+            count: counts[2],
+        },
+        DisputeAgingBucket {
+            bucket: "24h+".to_string(),
+            count: counts[3],
+        },
+    ]
+}
+
+pub fn unresolved_exception_sla_metrics(
+    exception_queue: &[ReconExceptionQueueItem],
+    as_of: DateTime<Utc>,
+) -> UnresolvedSlaMetrics {
+    let total_open = exception_queue.len() as u32;
+    let overdue = exception_queue
+        .iter()
+        .filter(|item| as_of > item.sla_due_at)
+        .count() as u32;
+    let on_track = total_open.saturating_sub(overdue);
+
+    UnresolvedSlaMetrics {
+        total_open,
+        overdue,
+        on_track,
+        overdue_rate_bps: ratio_to_bps(overdue, total_open),
+    }
+}
+
+pub fn build_recon_compliance_evidence_export(
+    result: &ReconRunResult,
+    as_of: DateTime<Utc>,
+) -> ReconComplianceEvidenceExport {
+    let mut owner_queue_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for item in &result.exception_queue {
+        *owner_queue_counts
+            .entry(item.owner_queue.clone())
+            .or_insert(0) += 1;
+    }
+
+    ReconComplianceEvidenceExport {
+        run_id: result.run_id.clone(),
+        generated_at: as_of,
+        dispute_aging: dispute_aging_buckets(&result.exception_queue, as_of),
+        unresolved_sla: unresolved_exception_sla_metrics(&result.exception_queue, as_of),
+        owner_queue_counts,
     }
 }
 
@@ -882,6 +982,63 @@ mod tests {
         assert_eq!(result.metrics.total_candidates, 11);
         assert_eq!(result.metrics.auto_matched, 8);
         assert!(result.metrics.auto_match_rate_percent() >= 70.0);
+    }
+
+    #[test]
+    fn dispute_aging_buckets_are_computed_for_exception_queue() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(10);
+
+        let buckets = dispute_aging_buckets(&result.exception_queue, as_of);
+        assert_eq!(
+            buckets,
+            vec![
+                DisputeAgingBucket {
+                    bucket: "0-4h".to_string(),
+                    count: 0
+                },
+                DisputeAgingBucket {
+                    bucket: "4-8h".to_string(),
+                    count: 0
+                },
+                DisputeAgingBucket {
+                    bucket: "8-24h".to_string(),
+                    count: 3
+                },
+                DisputeAgingBucket {
+                    bucket: "24h+".to_string(),
+                    count: 0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unresolved_sla_metrics_flag_overdue_items() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(10);
+
+        let metrics = unresolved_exception_sla_metrics(&result.exception_queue, as_of);
+        assert_eq!(metrics.total_open, 3);
+        assert_eq!(metrics.overdue, 2);
+        assert_eq!(metrics.on_track, 1);
+        assert_eq!(metrics.overdue_rate_bps, 6666);
+    }
+
+    #[test]
+    fn compliance_evidence_export_contains_owner_queue_counts() {
+        let fixture = seeded_fixture();
+        let result = reconcile_v1(&fixture);
+        let as_of = fixture.run_started_at + Duration::hours(10);
+
+        let export = build_recon_compliance_evidence_export(&result, as_of);
+        assert_eq!(export.run_id, fixture.run_id);
+        assert_eq!(export.unresolved_sla.total_open, 3);
+        assert_eq!(export.owner_queue_counts.get("PAYMENTS_OPS"), Some(&1));
+        assert_eq!(export.owner_queue_counts.get("TREASURY_OPS"), Some(&1));
+        assert_eq!(export.owner_queue_counts.get("DATA_QUALITY"), Some(&1));
     }
 
     #[test]

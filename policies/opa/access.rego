@@ -57,6 +57,10 @@ mapping_change_action if { input.action == "mapping_change" }
 ruleset_change_action if { input.action == "ruleset_change" }
 estimate_change_action if { input.action == "estimate_change" }
 dispute_approval_action if { input.action == "dispute_approval" }
+tamper_log_seal_action if { input.action == "tamper_log_seal" }
+access_review_export_action if { input.action == "access_review_export" }
+pci_scope_update_action if { input.action == "pci_scope_update" }
+legal_hold_override_action if { input.action == "legal_hold_override" }
 
 non_bypassable_sod_action if posting_action
 non_bypassable_sod_action if posting_approval_action
@@ -67,10 +71,14 @@ non_bypassable_sod_action if mapping_change_action
 non_bypassable_sod_action if ruleset_change_action
 non_bypassable_sod_action if estimate_change_action
 non_bypassable_sod_action if dispute_approval_action
+non_bypassable_sod_action if tamper_log_seal_action
+non_bypassable_sod_action if access_review_export_action
 
 critical_action if non_bypassable_sod_action
 critical_action if period_lock_action
 critical_action if policy_change_action
+critical_action if pci_scope_update_action
+critical_action if legal_hold_override_action
 
 sod_block if {
   critical_action
@@ -165,6 +173,66 @@ master_data_change_context_valid if {
   change_request_id != ""
 }
 
+tamper_log_seal_context_valid if {
+  not tamper_log_seal_action
+}
+
+tamper_log_seal_context_valid if {
+  tamper_log_seal_action
+  resource := object.get(input, "resource", {})
+  seal_batch_id := object.get(resource, "seal_batch_id", "")
+  seal_chain_digest := object.get(resource, "seal_chain_digest", "")
+  evidence_ref := object.get(resource, "evidence_ref", "")
+  seal_batch_id != ""
+  seal_chain_digest != ""
+  evidence_ref != ""
+}
+
+access_review_export_context_valid if {
+  not access_review_export_action
+}
+
+access_review_export_context_valid if {
+  access_review_export_action
+  resource := object.get(input, "resource", {})
+  review_period_id := object.get(resource, "review_period_id", "")
+  review_owner := object.get(resource, "review_owner", "")
+  evidence_ref := object.get(resource, "evidence_ref", "")
+  review_period_id != ""
+  review_owner != ""
+  evidence_ref != ""
+}
+
+pci_scope_update_context_valid if {
+  not pci_scope_update_action
+}
+
+pci_scope_update_context_valid if {
+  pci_scope_update_action
+  resource := object.get(input, "resource", {})
+  pci_scope_version := object.get(resource, "pci_scope_version", "")
+  control_matrix_id := object.get(resource, "control_matrix_id", "")
+  owner_approval_id := object.get(resource, "owner_approval_id", "")
+  pci_scope_version != ""
+  control_matrix_id != ""
+  owner_approval_id != ""
+}
+
+legal_hold_override_context_valid if {
+  not legal_hold_override_action
+}
+
+legal_hold_override_context_valid if {
+  legal_hold_override_action
+  resource := object.get(input, "resource", {})
+  hold_id := object.get(resource, "hold_id", "")
+  override_ticket_id := object.get(resource, "override_ticket_id", "")
+  override_reason := object.get(resource, "override_reason", "")
+  hold_id != ""
+  override_ticket_id != ""
+  override_reason != ""
+}
+
 break_glass_requested if {
   object.get(object.get(input, "break_glass", {}), "enabled", false)
 }
@@ -248,4 +316,8 @@ allow if {
   intercompany_posting_approval_context_valid
   close_approval_context_valid
   master_data_change_context_valid
+  tamper_log_seal_context_valid
+  access_review_export_context_valid
+  pci_scope_update_context_valid
+  legal_hold_override_context_valid
 }

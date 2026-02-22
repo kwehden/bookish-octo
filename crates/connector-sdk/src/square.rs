@@ -507,10 +507,12 @@ fn has_any(payload: &Value, pointers: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use chrono::Utc;
     use serde_json::json;
 
-    use crate::ConnectorAdapter;
+    use crate::{run_replay_backfill_resiliency, ConnectorAdapter, RawEvent};
 
     use super::SquareAdapter;
 
@@ -670,5 +672,47 @@ mod tests {
             error.to_string(),
             "normalization failed: missing field `location_id`"
         );
+    }
+
+    #[tokio::test]
+    async fn replay_backfill_resiliency_meets_target_for_square() {
+        let adapter = SquareAdapter;
+        let events = vec![
+            RawEvent {
+                source_event_id: "sq_evt_sale_900".to_string(),
+                occurred_at: Utc::now(),
+                payload: json!({
+                    "type": "payment.created",
+                    "tenant_id": "tenant_1",
+                    "legal_entity_id": "US_CO_01",
+                    "location_id": "BRECK_BASE_AREA",
+                    "order_id": "ord_900",
+                    "amount_money": {"amount": 9999, "currency": "USD"}
+                }),
+            },
+            RawEvent {
+                source_event_id: "sq_evt_refund_901".to_string(),
+                occurred_at: Utc::now(),
+                payload: json!({
+                    "entity": "refund",
+                    "tenant_id": "tenant_1",
+                    "legal_entity_id": "US_CO_01",
+                    "location_id": "BRECK_BASE_AREA",
+                    "refund_id": "rf_901",
+                    "payment_id": "pay_901",
+                    "amount_minor": 500,
+                    "currency": "USD"
+                }),
+            },
+        ];
+        let failures = BTreeSet::from([0_usize]);
+
+        let result = run_replay_backfill_resiliency(&adapter, &events, &failures, 1000, 150)
+            .await
+            .unwrap();
+        assert_eq!(result.hashes.len(), 2);
+        assert_eq!(result.telemetry.first_attempt_failures, 1);
+        assert_eq!(result.telemetry.recovered_events, 1);
+        assert!(result.telemetry.objective_met);
     }
 }
