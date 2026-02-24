@@ -1,6 +1,6 @@
 # Sprint 4 Close Checklist Contract (v1)
 
-Last updated: February 22, 2026  
+Last updated: February 23, 2026  
 Owner: Data/Reconciliation
 
 ## 1. Scope
@@ -8,6 +8,7 @@ Contract for Sprint 4 entity close-checklist behavior in `reconciliation-model`:
 - Entity-level dependency status tracking for close prerequisites.
 - Deterministic checklist progression decisions with blocker enforcement.
 - Multi-entity dry-run close simulation for 2-3 pilot entities.
+- Coupled elimination + FX translation output validation in the dry-run path.
 
 ## 2. Entity Checklist Data Contract
 Primary model: `EntityCloseChecklist`
@@ -65,17 +66,19 @@ Input: `MultiEntityCloseDryRunInput`
 - `run_id`
 - `run_started_at`
 - `checklists` (must contain 2-3 entities)
+- `consolidation_outputs` (entity-scoped elimination and FX journal lines for dry-run coupling checks)
 
 Output: `MultiEntityCloseDryRunResult`
 - Deterministic entity sorting by `legal_entity_id`, then `checklist_id`.
 - Per-entity outputs in `EntityCloseDryRunResult`:
-  - `status`, `can_progress`, `close_ready`, `unresolved_blockers`
+  - `status`, `can_progress`, `close_ready`, `elimination_output_valid`, `fx_translation_output_valid`, `unresolved_blockers`
 - Overall outcome:
-  - `passed=true` only when all entities are progression-eligible and close-ready.
+  - `passed=true` only when all entities are progression-eligible, close-ready, and have valid elimination + FX translation outputs.
   - `failed_entities` lists legal entities that fail gating.
 
 Validation rule:
 - Entity count outside 2-3 returns `UnsupportedEntityCount`.
+- Missing, unbalanced, or account-incomplete elimination/FX outputs produce deterministic blockers and fail dry-run pass criteria.
 
 ## 6. Sprint 4 Exit-Gate Mapping
 Mapped to `specs/SPRINT4_SQUAD_AGENT_EXECUTION_PLAN.md`:
@@ -91,6 +94,8 @@ Implemented in `crates/reconciliation-model/src/lib.rs`:
 - `checklist_evaluation_is_authorization_neutral`
 - `multi_entity_close_dry_run_passes_for_two_ready_entities`
 - `multi_entity_close_dry_run_fails_when_one_entity_has_blocker`
+- `multi_entity_close_dry_run_fails_when_fx_translation_output_is_missing`
+- `multi_entity_close_dry_run_coupling_is_deterministic_for_unsorted_inputs`
 - `multi_entity_close_dry_run_requires_two_to_three_entities`
 
 ## 8. Sprint 4 In-Repo Approval/Evidence Status

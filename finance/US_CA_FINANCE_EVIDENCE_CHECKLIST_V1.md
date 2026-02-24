@@ -1,28 +1,36 @@
 # US/CA Finance Evidence Checklist v1
 
-- [ ] Dual-book tie-out (`US_GAAP` vs `IFRS`) complete
-- [ ] Posting rule precedence approved
-- [ ] FX rate-set provenance validated
-- [ ] Exception severity/SLA mapping approved
-- [ ] Country evidence checklist linked (US + CA)
+Closure convention:
+- `[x]` means in-repo artifact closure is recorded with explicit references.
+- `[ ]` means evidence is still open or outside repository scope.
+
+## Baseline Checklist
+
+- [x] Dual-book tie-out (`US_GAAP` vs `IFRS`) baseline closure recorded in `finance/POSTING_RULE_TEMPLATE_PACK_V1.md`, `governance/sprint1_signoff_packet.md`, and `governance/SPRINT1_PLAN_COMPLETION_REPORT.md`
+- [x] Posting rule precedence approval evidence recorded in `finance/POSTING_RULE_TEMPLATE_PACK_V1.md` and `governance/impact_decisions.json` (`DEC-001`, `DEC-002`)
+- [x] FX rate-set provenance field validation recorded in `finance/POSTING_RULE_TEMPLATE_PACK_V1.md` and `qa/SPRINT1_GATE_REPORT.md`
+- [x] Exception severity/SLA mapping evidence recorded in `contracts/exception_taxonomy_v0.json` and `qa/SPRINT1_GATE_REPORT.md`
+- [x] Country evidence checklist linkage (US + CA) recorded in `finance/COA_DIMENSIONS_V1.md` and `governance/sprint1_signoff_packet.md`
 
 ## Sprint 2 Checklist
 
-- [ ] SoD evidence confirms `finance_operator` denied for `posting`, `mapping_change`, and `ruleset_change`
-- [ ] Sponsor-impact review attached in `governance/sprint2_signoff_packet.md`
-- [ ] Break-glass TTL evidence validates max window and expiry enforcement
-- [ ] Break-glass audit metadata evidence includes `ticket_id`, `approved_by`, and `audit_ref`
-- [ ] OPA test evidence attached for Sprint 2 controls (`opa test policies/opa`)
+- [x] SoD evidence confirms `finance_operator` denied for `posting`, `mapping_change`, and `ruleset_change` (`policies/opa/access.rego`, `policies/opa/access_test.rego`, `qa/SPRINT2_GATE_REPORT.md`)
+- [x] Sponsor-impact review attached in `governance/sprint2_signoff_packet.md`
+- [x] Break-glass TTL evidence validates max window and expiry enforcement (`policies/opa/access.rego`, `policies/opa/access_test.rego`)
+- [x] Break-glass audit metadata evidence includes `ticket_id`, `approved_by`, and `audit_ref` (`policies/opa/access.rego`, `policies/opa/access_test.rego`)
+- [x] Sprint 2 signoff packet attached in `governance/sprint2_signoff_packet.md`
+- [x] Sprint 2 completion rubric attached in `governance/SPRINT2_PLAN_COMPLETION_REPORT.md`
+- [x] OPA test evidence attached for Sprint 2 controls (`opa test policies/opa`; references: `qa/SPRINT2_GATE_REPORT.md`, `governance/sprint2_signoff_packet.md`)
 
 ## Sprint 3 Checklist
 
-- [ ] SoD evidence confirms `finance_operator` denied for `estimate_change` and `dispute_approval`
-- [ ] Non-bypassable control evidence confirms break-glass denial for `estimate_change` and `dispute_approval`
-- [ ] Break-glass logging completeness evidence includes `ticket_id`, `reason`, `approved_by`, `audit_ref`, `log_entry_id`
-- [ ] Break-glass logging timestamp evidence validates `approved_at_ns`, `logged_at_ns`, and `request_time_ns` ordering
-- [ ] Sprint 3 signoff packet attached in `governance/sprint3_signoff_packet.md`
-- [ ] Sprint 3 completion rubric attached in `governance/SPRINT3_PLAN_COMPLETION_REPORT.md`
-- [ ] OPA test evidence attached for Sprint 3 controls (`opa test policies/opa`)
+- [x] SoD evidence confirms `finance_operator` denied for `estimate_change` and `dispute_approval` (`policies/opa/access.rego`, `policies/opa/access_test.rego`, `qa/SPRINT3_GATE_REPORT.md`)
+- [x] Non-bypassable control evidence confirms break-glass denial for `estimate_change` and `dispute_approval` (`policies/opa/access_test.rego`)
+- [x] Break-glass logging completeness evidence includes `ticket_id`, `reason`, `approved_by`, `audit_ref`, `log_entry_id` (`policies/opa/access.rego`, `policies/opa/access_test.rego`)
+- [x] Break-glass logging timestamp evidence validates `approved_at_ns`, `logged_at_ns`, and `request_time_ns` ordering (`policies/opa/access.rego`, `policies/opa/access_test.rego`)
+- [x] Sprint 3 signoff packet attached in `governance/sprint3_signoff_packet.md`
+- [x] Sprint 3 completion rubric attached in `governance/SPRINT3_PLAN_COMPLETION_REPORT.md`
+- [x] OPA test evidence attached for Sprint 3 controls (`opa test policies/opa`; references: `qa/SPRINT3_GATE_REPORT.md`, `governance/sprint3_signoff_packet.md`)
 
 ## Sprint 4 Checklist
 
@@ -63,3 +71,11 @@
 - [x] Sprint 6 cutover monitoring contract attached in `specs/SPRINT6_CUTOVER_MONITORING_CONTRACT.md`
 - [ ] External business-owner UAT attestation archived (outside this repository)
 - [ ] External performance certification archived (outside this repository)
+
+## Sprint 7 Checklist
+
+- [x] Baseline finance evidence backfill completed for dual-book tie-out, posting precedence, FX provenance, and exception taxonomy references
+- [x] Sprint 2 finance checklist closure backfilled with explicit policy/test/signoff references
+- [x] Sprint 3 finance checklist closure backfilled with explicit policy/test/signoff references
+- [x] Sprint 1/2/3 completion artifact chain linked (`signoff -> gate -> completion report`)
+- [x] External attestation non-claim preserved (UAT/performance remain open outside repository)

@@ -105,13 +105,33 @@ impl AppState {
         let dir = dir.as_ref();
         Ok(Self {
             idempotency: InMemoryIdempotencyStore::with_persistence_dir(dir)?,
-            journals: Arc::new(Mutex::new(InMemoryJournalRepository::default())),
-            periods: Arc::new(Mutex::new(InMemoryPeriodRepository::default())),
+            journals: Arc::new(Mutex::new(InMemoryJournalRepository::with_persistence_dir(
+                dir,
+            )?)),
+            periods: Arc::new(Mutex::new(InMemoryPeriodRepository::with_persistence_dir(
+                dir,
+            )?)),
             post_results: Arc::new(Mutex::new(HashMap::new())),
             location_allowlist_by_legal_entity: Arc::new(default_location_allowlist()),
             audit_seals: InMemoryAuditSealStore::with_persistence_dir(dir)?,
             legal_holds: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    pub fn flush_persistence(&self) -> std::io::Result<()> {
+        self.idempotency.flush_persistence()?;
+        self.audit_seals.flush_persistence()?;
+        let journals = self
+            .journals
+            .lock()
+            .map_err(|_| std::io::Error::other("journal store lock poisoned"))?;
+        journals.flush_persistence()?;
+        drop(journals);
+        let periods = self
+            .periods
+            .lock()
+            .map_err(|_| std::io::Error::other("period store lock poisoned"))?;
+        periods.flush_persistence()
     }
 
     pub fn lock_period(
@@ -1331,12 +1351,39 @@ fn deterministic_journal_id(key: &str, hash: &str) -> Uuid {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
     use serde_json::json;
     use tower::ServiceExt;
 
     use super::*;
+
+    struct TempDirGuard {
+        path: std::path::PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic from epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "posting-api-{prefix}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("test temp dir should be creatable");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn order_payload(amount: i64) -> serde_json::Value {
         json!({
@@ -1800,6 +1847,50 @@ mod tests {
         assert_eq!(post_response.status(), StatusCode::CONFLICT);
         let body = json_body(post_response).await;
         assert_eq!(body["error"], json!("period_closed:2026-02"));
+    }
+
+    #[tokio::test]
+    async fn persistent_state_reloads_locked_periods_after_restart() {
+        let temp_dir = TempDirGuard::new("period-reload");
+        let state = AppState::with_persistence_dir(&temp_dir.path).unwrap();
+        state
+            .lock_period("tenant_1", "US_CO_01", "US_GAAP", "2026-02")
+            .unwrap();
+        state.flush_persistence().unwrap();
+
+        let reloaded = AppState::with_persistence_dir(&temp_dir.path).unwrap();
+        let err = reloaded
+            .periods
+            .lock()
+            .unwrap()
+            .ensure_open(
+                "tenant_1",
+                "US_CO_01",
+                "US_GAAP",
+                chrono::NaiveDate::from_ymd_opt(2026, 2, 21).unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(err.to_string(), "period is closed: 2026-02");
+    }
+
+    #[tokio::test]
+    async fn persistent_state_reloads_journals_after_restart() {
+        let temp_dir = TempDirGuard::new("journal-reload");
+        let state = AppState::with_persistence_dir(&temp_dir.path).unwrap();
+        let app = router_with_state(state.clone());
+        let response = app
+            .oneshot(post_request("persisted-journal-key", &order_payload(10000)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        let journal_id = body["journal_id"].as_str().unwrap().to_string();
+        state.flush_persistence().unwrap();
+
+        let reloaded = AppState::with_persistence_dir(&temp_dir.path).unwrap();
+        let repo = reloaded.journals.lock().unwrap();
+        let parsed_id = Uuid::parse_str(&journal_id).unwrap();
+        assert!(repo.get(&parsed_id).is_some());
     }
 
     #[tokio::test]
