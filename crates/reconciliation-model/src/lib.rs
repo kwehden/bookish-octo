@@ -8,6 +8,10 @@ const DEFAULT_MATCH_TOLERANCE_MINOR: i64 = 100;
 const ONE_HUNDRED_PERCENT_BPS: u32 = 10_000;
 const MIN_DRY_RUN_ENTITY_COUNT: usize = 2;
 const MAX_DRY_RUN_ENTITY_COUNT: usize = 3;
+const ELIMINATION_DEBIT_ACCOUNT_ID: &str = "4999-INTERCOMPANY-ELIMINATION";
+const ELIMINATION_CREDIT_ACCOUNT_ID: &str = "5999-INTERCOMPANY-ELIMINATION";
+const FX_TRANSLATION_CTA_ACCOUNT_ID: &str = "3100-CUMULATIVE-TRANSLATION-ADJUSTMENT";
+const FX_TRANSLATION_GAIN_LOSS_ACCOUNT_ID: &str = "7300-FX-TRANSLATION-GAIN-LOSS";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MatchOutcome {
@@ -235,10 +239,33 @@ pub struct CloseChecklistActorContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CloseJournalEntrySide {
+    Debit,
+    Credit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloseJournalLine {
+    pub account_id: String,
+    pub entry_side: CloseJournalEntrySide,
+    pub amount_minor: i64,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EntityCloseConsolidationOutputs {
+    pub legal_entity_id: String,
+    pub elimination_lines: Vec<CloseJournalLine>,
+    pub fx_translation_lines: Vec<CloseJournalLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MultiEntityCloseDryRunInput {
     pub run_id: String,
     pub run_started_at: DateTime<Utc>,
     pub checklists: Vec<EntityCloseChecklist>,
+    #[serde(default)]
+    pub consolidation_outputs: Vec<EntityCloseConsolidationOutputs>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -248,6 +275,8 @@ pub struct EntityCloseDryRunResult {
     pub status: CloseChecklistStatus,
     pub can_progress: bool,
     pub close_ready: bool,
+    pub elimination_output_valid: bool,
+    pub fx_translation_output_valid: bool,
     pub unresolved_blockers: Vec<String>,
 }
 
@@ -700,6 +729,19 @@ fn simulate_multi_entity_close_dry_run_internal(
             .cmp(&right.legal_entity_id)
             .then(left.checklist_id.cmp(&right.checklist_id))
     });
+    let mut consolidation_output_index: BTreeMap<String, EntityCloseConsolidationOutputs> =
+        BTreeMap::new();
+    let mut duplicate_consolidation_outputs: BTreeMap<String, usize> = BTreeMap::new();
+    for outputs in &input.consolidation_outputs {
+        if consolidation_output_index
+            .insert(outputs.legal_entity_id.clone(), outputs.clone())
+            .is_some()
+        {
+            *duplicate_consolidation_outputs
+                .entry(outputs.legal_entity_id.clone())
+                .or_insert(1) += 1;
+        }
+    }
 
     let mut entity_results = Vec::with_capacity(sorted_checklists.len());
     let mut failed_entities = Vec::new();
@@ -709,9 +751,20 @@ fn simulate_multi_entity_close_dry_run_internal(
         } else {
             evaluate_entity_close_checklist(&checklist)
         };
-        let close_ready = progression.status == CloseChecklistStatus::ReadyToClose
-            || progression.status == CloseChecklistStatus::Closed;
-        if !progression.can_progress || !close_ready {
+        let has_duplicate_outputs =
+            duplicate_consolidation_outputs.contains_key(&checklist.legal_entity_id);
+        let (elimination_output_valid, fx_translation_output_valid, output_blockers) =
+            evaluate_consolidation_output_coupling(
+                consolidation_output_index.get(&checklist.legal_entity_id),
+                has_duplicate_outputs,
+            );
+        let mut unresolved_blockers = progression.unresolved_blockers;
+        unresolved_blockers.extend(output_blockers);
+        let can_progress = progression.can_progress && unresolved_blockers.is_empty();
+        let close_ready = can_progress
+            && (progression.status == CloseChecklistStatus::ReadyToClose
+                || progression.status == CloseChecklistStatus::Closed);
+        if !can_progress || !close_ready {
             failed_entities.push(checklist.legal_entity_id.clone());
         }
 
@@ -719,9 +772,11 @@ fn simulate_multi_entity_close_dry_run_internal(
             checklist_id: checklist.checklist_id,
             legal_entity_id: checklist.legal_entity_id,
             status: progression.status,
-            can_progress: progression.can_progress,
+            can_progress,
             close_ready,
-            unresolved_blockers: progression.unresolved_blockers,
+            elimination_output_valid,
+            fx_translation_output_valid,
+            unresolved_blockers,
         });
     }
 
@@ -732,6 +787,99 @@ fn simulate_multi_entity_close_dry_run_internal(
         passed: failed_entities.is_empty(),
         failed_entities,
     })
+}
+
+fn evaluate_consolidation_output_coupling(
+    outputs: Option<&EntityCloseConsolidationOutputs>,
+    has_duplicate_outputs: bool,
+) -> (bool, bool, Vec<String>) {
+    let mut blockers = Vec::new();
+    if has_duplicate_outputs {
+        blockers.push("duplicate_consolidation_output".to_string());
+    }
+
+    let Some(outputs) = outputs else {
+        blockers.push("elimination_output_missing".to_string());
+        blockers.push("fx_translation_output_missing".to_string());
+        return (false, false, blockers);
+    };
+
+    let elimination_output_valid =
+        validate_elimination_output(&outputs.elimination_lines, &mut blockers);
+    let fx_translation_output_valid =
+        validate_fx_translation_output(&outputs.fx_translation_lines, &mut blockers);
+
+    (
+        elimination_output_valid,
+        fx_translation_output_valid,
+        blockers,
+    )
+}
+
+fn validate_elimination_output(lines: &[CloseJournalLine], blockers: &mut Vec<String>) -> bool {
+    if lines.is_empty() {
+        blockers.push("elimination_output_missing".to_string());
+        return false;
+    }
+
+    let has_expected_debit = lines.iter().any(|line| {
+        line.account_id == ELIMINATION_DEBIT_ACCOUNT_ID
+            && line.entry_side == CloseJournalEntrySide::Debit
+            && line.amount_minor > 0
+    });
+    let has_expected_credit = lines.iter().any(|line| {
+        line.account_id == ELIMINATION_CREDIT_ACCOUNT_ID
+            && line.entry_side == CloseJournalEntrySide::Credit
+            && line.amount_minor > 0
+    });
+    let balanced = has_balanced_journal(lines);
+
+    if !has_expected_debit || !has_expected_credit {
+        blockers.push("elimination_accounts_missing".to_string());
+    }
+    if !balanced {
+        blockers.push("elimination_output_unbalanced".to_string());
+    }
+
+    has_expected_debit && has_expected_credit && balanced
+}
+
+fn validate_fx_translation_output(lines: &[CloseJournalLine], blockers: &mut Vec<String>) -> bool {
+    if lines.is_empty() {
+        blockers.push("fx_translation_output_missing".to_string());
+        return false;
+    }
+
+    let has_cta_account = lines
+        .iter()
+        .any(|line| line.account_id == FX_TRANSLATION_CTA_ACCOUNT_ID && line.amount_minor > 0);
+    let has_gain_loss_account = lines.iter().any(|line| {
+        line.account_id == FX_TRANSLATION_GAIN_LOSS_ACCOUNT_ID && line.amount_minor > 0
+    });
+    let balanced = has_balanced_journal(lines);
+
+    if !has_cta_account || !has_gain_loss_account {
+        blockers.push("fx_translation_accounts_missing".to_string());
+    }
+    if !balanced {
+        blockers.push("fx_translation_output_unbalanced".to_string());
+    }
+
+    has_cta_account && has_gain_loss_account && balanced
+}
+
+fn has_balanced_journal(lines: &[CloseJournalLine]) -> bool {
+    let debit_total = lines
+        .iter()
+        .filter(|line| line.entry_side == CloseJournalEntrySide::Debit)
+        .map(|line| line.amount_minor)
+        .sum::<i64>();
+    let credit_total = lines
+        .iter()
+        .filter(|line| line.entry_side == CloseJournalEntrySide::Credit)
+        .map(|line| line.amount_minor)
+        .sum::<i64>();
+    debit_total > 0 && debit_total == credit_total
 }
 
 fn derive_close_checklist_status(
@@ -1356,6 +1504,10 @@ mod tests {
                     CloseChecklistStatus::InProgress,
                 ),
             ],
+            consolidation_outputs: vec![
+                sample_consolidation_outputs("LE-US", 18_500, 225),
+                sample_consolidation_outputs("LE-CA", 11_250, -110),
+            ],
         };
 
         let result =
@@ -1363,7 +1515,9 @@ mod tests {
         assert!(result.passed);
         assert!(result.failed_entities.is_empty());
         assert_eq!(result.entity_results.len(), 2);
-        assert!(result.entity_results.iter().all(|item| item.close_ready));
+        assert!(result.entity_results.iter().all(|item| item.close_ready
+            && item.elimination_output_valid
+            && item.fx_translation_output_valid));
     }
 
     #[test]
@@ -1417,6 +1571,11 @@ mod tests {
                     CloseChecklistStatus::InProgress,
                 ),
             ],
+            consolidation_outputs: vec![
+                sample_consolidation_outputs("LE-US", 18_500, 225),
+                sample_consolidation_outputs("LE-CA", 11_250, -110),
+                sample_consolidation_outputs("LE-HQ", 8_400, 80),
+            ],
         };
         let actor = CloseChecklistActorContext {
             actor_id: "u-controller".to_string(),
@@ -1436,6 +1595,109 @@ mod tests {
     }
 
     #[test]
+    fn multi_entity_close_dry_run_fails_when_fx_translation_output_is_missing() {
+        let input = MultiEntityCloseDryRunInput {
+            run_id: "sprint4-dry-run-fx-missing".to_string(),
+            run_started_at: fixed_ts(),
+            checklists: vec![
+                sample_close_checklist(
+                    "LE-US",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+                sample_close_checklist(
+                    "LE-CA",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+            ],
+            consolidation_outputs: vec![
+                sample_consolidation_outputs("LE-US", 18_500, 225),
+                EntityCloseConsolidationOutputs {
+                    legal_entity_id: "LE-CA".to_string(),
+                    elimination_lines: sample_elimination_lines(11_250),
+                    fx_translation_lines: vec![],
+                },
+            ],
+        };
+
+        let result =
+            simulate_multi_entity_close_dry_run(&input).expect("2-entity dry run should execute");
+        assert!(!result.passed);
+        assert_eq!(result.failed_entities, vec!["LE-CA".to_string()]);
+        let ca_result = result
+            .entity_results
+            .iter()
+            .find(|item| item.legal_entity_id == "LE-CA")
+            .expect("LE-CA result should be present");
+        assert!(!ca_result.fx_translation_output_valid);
+        assert!(!ca_result.can_progress);
+        assert!(ca_result
+            .unresolved_blockers
+            .iter()
+            .any(|blocker| blocker == "fx_translation_output_missing"));
+    }
+
+    #[test]
+    fn multi_entity_close_dry_run_coupling_is_deterministic_for_unsorted_inputs() {
+        let input = MultiEntityCloseDryRunInput {
+            run_id: "sprint4-dry-run-deterministic".to_string(),
+            run_started_at: fixed_ts(),
+            checklists: vec![
+                sample_close_checklist(
+                    "LE-HQ",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+                sample_close_checklist(
+                    "LE-US",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+                sample_close_checklist(
+                    "LE-CA",
+                    vec![(
+                        "bank_stmt_reconciled",
+                        CloseDependencyStatus::Satisfied,
+                        true,
+                    )],
+                    CloseChecklistStatus::ReadyToClose,
+                ),
+            ],
+            consolidation_outputs: vec![
+                sample_consolidation_outputs("LE-US", 18_500, 225),
+                sample_consolidation_outputs("LE-HQ", 8_400, 80),
+                sample_consolidation_outputs("LE-CA", 11_250, -110),
+            ],
+        };
+
+        let first =
+            simulate_multi_entity_close_dry_run(&input).expect("3-entity dry run should execute");
+        let second =
+            simulate_multi_entity_close_dry_run(&input).expect("3-entity dry run should execute");
+        assert_eq!(first, second);
+        assert_eq!(first.entity_results[0].legal_entity_id, "LE-CA");
+        assert_eq!(first.entity_results[1].legal_entity_id, "LE-HQ");
+        assert_eq!(first.entity_results[2].legal_entity_id, "LE-US");
+    }
+
+    #[test]
     fn multi_entity_close_dry_run_requires_two_to_three_entities() {
         let input = MultiEntityCloseDryRunInput {
             run_id: "sprint4-dry-run-invalid".to_string(),
@@ -1449,6 +1711,7 @@ mod tests {
                 )],
                 CloseChecklistStatus::ReadyToClose,
             )],
+            consolidation_outputs: vec![],
         };
 
         let result = simulate_multi_entity_close_dry_run(&input);
@@ -1501,6 +1764,7 @@ mod tests {
                     CloseChecklistStatus::ReadyToClose,
                 ),
             ],
+            consolidation_outputs: vec![],
         };
 
         let result = simulate_multi_entity_close_dry_run(&input);
@@ -1533,6 +1797,53 @@ mod tests {
                 .collect(),
             updated_at: fixed_ts(),
         }
+    }
+
+    fn sample_consolidation_outputs(
+        legal_entity_id: &str,
+        elimination_amount_minor: i64,
+        fx_translation_amount_minor: i64,
+    ) -> EntityCloseConsolidationOutputs {
+        EntityCloseConsolidationOutputs {
+            legal_entity_id: legal_entity_id.to_string(),
+            elimination_lines: sample_elimination_lines(elimination_amount_minor),
+            fx_translation_lines: sample_fx_translation_lines(fx_translation_amount_minor),
+        }
+    }
+
+    fn sample_elimination_lines(amount_minor: i64) -> Vec<CloseJournalLine> {
+        vec![
+            CloseJournalLine {
+                account_id: ELIMINATION_DEBIT_ACCOUNT_ID.to_string(),
+                entry_side: CloseJournalEntrySide::Debit,
+                amount_minor,
+                currency: "USD".to_string(),
+            },
+            CloseJournalLine {
+                account_id: ELIMINATION_CREDIT_ACCOUNT_ID.to_string(),
+                entry_side: CloseJournalEntrySide::Credit,
+                amount_minor,
+                currency: "USD".to_string(),
+            },
+        ]
+    }
+
+    fn sample_fx_translation_lines(amount_minor: i64) -> Vec<CloseJournalLine> {
+        let amount_minor = amount_minor.abs();
+        vec![
+            CloseJournalLine {
+                account_id: FX_TRANSLATION_CTA_ACCOUNT_ID.to_string(),
+                entry_side: CloseJournalEntrySide::Debit,
+                amount_minor,
+                currency: "USD".to_string(),
+            },
+            CloseJournalLine {
+                account_id: FX_TRANSLATION_GAIN_LOSS_ACCOUNT_ID.to_string(),
+                entry_side: CloseJournalEntrySide::Credit,
+                amount_minor,
+                currency: "USD".to_string(),
+            },
+        ]
     }
 
     fn seeded_fixture() -> ReconRunInput {

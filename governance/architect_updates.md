@@ -69,3 +69,16 @@
 - Controls&Sec: release-control override governance and chain-of-custody evidence closures tied to sprint signoff gates.
 - Data/Reconciliation: post-cutover monitoring snapshot and evidence-export validation (`build_post_cutover_monitoring_snapshot`, `build_recon_compliance_evidence_export`).
 - QA/Release: Sprint 6 gate report alignment against exit criteria and governance artifact completeness checks.
+
+## Update 9
+- Sprint 7 remediation scope executed against three remaining in-repo gaps: persistent actor expansion, Sprint 4 elimination/FX coupling closure, and Sprint 1-3 governance backfill.
+- Platform durability expanded from idempotency/audit-seal to journal + period authoritative state with write-behind persistence, flush barriers, and restart reload validation.
+- Sprint 4 criterion #6 is now fully closed: multi-entity dry-run requires deterministic elimination/FX coupled outputs and emits explicit blocker taxonomy for missing/unbalanced artifacts.
+- Sprint 1/2/3 finance, signoff, gate, and completion artifacts were backfilled to explicit in-repo closure state with external attestation non-claims preserved.
+- Sprint 7 completion score is `16/16 (100.0%)` for in-repo scope; external UAT/performance attestations remain program-level blockers managed in Sprint 5/6 packets.
+
+## Major Tool Use Summary (Sprint 7, major activities only)
+- Platform: `cargo test -p ledger-posting` and `cargo test -p posting-api` to validate write-behind/reload behavior for journal and period state.
+- Integration/Data: `cargo test -p reconciliation-model` for deterministic elimination/FX coupled dry-run enforcement.
+- Finance/Controls: checklist/signoff artifact-chain reconciliation and decision-reference validation.
+- QA/Release: `./scripts/run_contract_gates.sh` for end-to-end deterministic gate health and artifact presence checks.

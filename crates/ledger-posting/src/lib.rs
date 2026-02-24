@@ -1,9 +1,152 @@
 use std::collections::HashMap;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::Arc;
+use std::thread;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
+
+const JOURNAL_STORE_FILENAME: &str = "journal_store.json";
+
+enum WriteBehindCommand<T> {
+    Persist(T),
+    Flush(Sender<io::Result<()>>),
+    Shutdown,
+}
+
+struct WriteBehind<T> {
+    tx: Sender<WriteBehindCommand<T>>,
+}
+
+impl<T> Drop for WriteBehind<T> {
+    fn drop(&mut self) {
+        let _ = self.tx.send(WriteBehindCommand::Shutdown);
+    }
+}
+
+impl<T> WriteBehind<T>
+where
+    T: Serialize + Send + 'static,
+{
+    fn new(path: PathBuf, worker_name: &str) -> io::Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name(worker_name.to_string())
+            .spawn(move || run_write_behind_worker(path, rx))?;
+        Ok(Self { tx })
+    }
+
+    fn persist(&self, snapshot: T) {
+        let _ = self.tx.send(WriteBehindCommand::Persist(snapshot));
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(WriteBehindCommand::Flush(ack_tx))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "persistence worker stopped"))?;
+        ack_rx
+            .recv()
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "persistence worker stopped"))?
+    }
+}
+
+fn run_write_behind_worker<T>(path: PathBuf, rx: Receiver<WriteBehindCommand<T>>)
+where
+    T: Serialize,
+{
+    let mut latest_snapshot = None;
+    loop {
+        match rx.recv() {
+            Ok(WriteBehindCommand::Persist(snapshot)) => {
+                latest_snapshot = Some(snapshot);
+            }
+            Ok(WriteBehindCommand::Flush(ack)) => {
+                let _ = ack.send(persist_latest_snapshot(&path, &mut latest_snapshot));
+                continue;
+            }
+            Ok(WriteBehindCommand::Shutdown) => {
+                let _ = persist_latest_snapshot(&path, &mut latest_snapshot);
+                return;
+            }
+            Err(_) => {
+                let _ = persist_latest_snapshot(&path, &mut latest_snapshot);
+                return;
+            }
+        }
+
+        loop {
+            match rx.try_recv() {
+                Ok(WriteBehindCommand::Persist(snapshot)) => {
+                    latest_snapshot = Some(snapshot);
+                }
+                Ok(WriteBehindCommand::Flush(ack)) => {
+                    let _ = ack.send(persist_latest_snapshot(&path, &mut latest_snapshot));
+                }
+                Ok(WriteBehindCommand::Shutdown) => {
+                    let _ = persist_latest_snapshot(&path, &mut latest_snapshot);
+                    return;
+                }
+                Err(TryRecvError::Empty) => {
+                    let _ = persist_latest_snapshot(&path, &mut latest_snapshot);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    let _ = persist_latest_snapshot(&path, &mut latest_snapshot);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn persist_latest_snapshot<T>(path: &Path, snapshot: &mut Option<T>) -> io::Result<()>
+where
+    T: Serialize,
+{
+    if let Some(value) = snapshot.take() {
+        persist_snapshot(path, &value)?;
+    }
+    Ok(())
+}
+
+fn persist_snapshot<T>(path: &Path, snapshot: &T) -> io::Result<()>
+where
+    T: Serialize,
+{
+    let encoded = serde_json::to_vec(snapshot).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to serialize persistence snapshot: {error}"),
+        )
+    })?;
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, encoded)?;
+    fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+fn load_snapshot_or_default<T>(path: &Path) -> io::Result<T>
+where
+    T: DeserializeOwned + Default,
+{
+    match fs::read(path) {
+        Ok(encoded) => serde_json::from_slice(&encoded).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to deserialize persistence snapshot: {error}"),
+            )
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(T::default()),
+        Err(error) => Err(error),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JournalHeader {
@@ -67,18 +210,50 @@ pub enum LedgerError {
     AlreadyReversed,
 }
 
-#[derive(Default)]
 pub struct InMemoryJournalRepository {
     journals: HashMap<Uuid, JournalRecord>,
+    persistence: Option<Arc<WriteBehind<HashMap<Uuid, JournalRecord>>>>,
+}
+
+impl Default for InMemoryJournalRepository {
+    fn default() -> Self {
+        Self {
+            journals: HashMap::new(),
+            persistence: None,
+        }
+    }
 }
 
 impl InMemoryJournalRepository {
+    pub fn with_persistence_dir(dir: impl AsRef<Path>) -> io::Result<Self> {
+        let path = dir.as_ref().join(JOURNAL_STORE_FILENAME);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let loaded = load_snapshot_or_default(&path)?;
+        let persistence = Arc::new(WriteBehind::new(path, "journal-write-behind")?);
+        Ok(Self {
+            journals: loaded,
+            persistence: Some(persistence),
+        })
+    }
+
+    pub fn flush_persistence(&self) -> io::Result<()> {
+        match &self.persistence {
+            Some(persistence) => persistence.flush(),
+            None => Ok(()),
+        }
+    }
+
     pub fn insert_posted(&mut self, record: JournalRecord) -> Result<(), LedgerError> {
         if self.journals.contains_key(&record.header.journal_id) {
             return Err(LedgerError::JournalExists);
         }
         validate_balanced(&record.lines)?;
         self.journals.insert(record.header.journal_id, record);
+        if let Some(persistence) = &self.persistence {
+            persistence.persist(self.journals.clone());
+        }
         Ok(())
     }
 
@@ -99,14 +274,19 @@ impl InMemoryJournalRepository {
     }
 
     pub fn reverse(&mut self, journal_id: &Uuid) -> Result<(), LedgerError> {
-        let record = self
-            .journals
-            .get_mut(journal_id)
-            .ok_or(LedgerError::NotFound)?;
-        if record.header.status == JournalStatus::Reversed {
-            return Err(LedgerError::AlreadyReversed);
+        {
+            let record = self
+                .journals
+                .get_mut(journal_id)
+                .ok_or(LedgerError::NotFound)?;
+            if record.header.status == JournalStatus::Reversed {
+                return Err(LedgerError::AlreadyReversed);
+            }
+            record.header.status = JournalStatus::Reversed;
         }
-        record.header.status = JournalStatus::Reversed;
+        if let Some(persistence) = &self.persistence {
+            persistence.persist(self.journals.clone());
+        }
         Ok(())
     }
 }
@@ -140,6 +320,32 @@ pub fn validate_balanced(lines: &[JournalLine]) -> Result<(), LedgerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic from epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "ledger-posting-{prefix}-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("test temp dir should be creatable");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn sample_header() -> JournalHeader {
         JournalHeader {
@@ -238,5 +444,43 @@ mod tests {
 
         let error = repo.reverse(&missing);
         assert_eq!(error, Err(LedgerError::NotFound));
+    }
+
+    #[test]
+    fn flush_persists_journal_store_to_disk() {
+        let temp_dir = TempDirGuard::new("journal-flush");
+        let mut repo = InMemoryJournalRepository::with_persistence_dir(&temp_dir.path).unwrap();
+        let record = JournalRecord {
+            header: sample_header(),
+            lines: balanced_lines(),
+        };
+        let journal_id = record.header.journal_id;
+
+        repo.insert_posted(record).unwrap();
+        repo.flush_persistence().unwrap();
+
+        let reloaded = InMemoryJournalRepository::with_persistence_dir(&temp_dir.path).unwrap();
+        assert!(reloaded.get(&journal_id).is_some());
+    }
+
+    #[test]
+    fn reloaded_journal_store_preserves_reverse_status() {
+        let temp_dir = TempDirGuard::new("journal-restart");
+        let journal_id = {
+            let mut repo = InMemoryJournalRepository::with_persistence_dir(&temp_dir.path).unwrap();
+            let record = JournalRecord {
+                header: sample_header(),
+                lines: balanced_lines(),
+            };
+            let journal_id = record.header.journal_id;
+            repo.insert_posted(record).unwrap();
+            repo.reverse(&journal_id).unwrap();
+            repo.flush_persistence().unwrap();
+            journal_id
+        };
+
+        let reloaded = InMemoryJournalRepository::with_persistence_dir(&temp_dir.path).unwrap();
+        let status = reloaded.get(&journal_id).unwrap().header.status.clone();
+        assert_eq!(status, JournalStatus::Reversed);
     }
 }

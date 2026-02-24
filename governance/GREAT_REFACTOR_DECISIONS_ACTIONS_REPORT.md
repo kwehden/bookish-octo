@@ -137,7 +137,12 @@ Pike alignment:
 ## Open Actions
 1. Attach external business-owner UAT attestation into Sprint 5/6 signoff and QA gate packets.
 2. Attach external 2,000-user no-bend performance certification into Sprint 5/6 signoff and QA gate packets.
-3. Extend persistent actor pattern from idempotency/audit-seal into additional authoritative runtime state where required for multi-instance operation.
+3. Evaluate optional persistence extension for non-critical in-memory stores (for example `legal_holds` and idempotency result cache) based on multi-instance operations policy.
+
+## Sprint 7 Update
+- Item 2 addressed: persistent actor pattern expanded to journal + period authoritative state with write-behind persistence and restart reload tests.
+- Item 3 addressed: Sprint 4 dry-run now enforces elimination/FX coupled-output validity with deterministic blockers/tests; Sprint 4 criterion #6 moved to full closure.
+- Item 4 addressed: Sprint 1-3 finance/governance artifact debt backfilled with explicit in-repo closure references and external-attestation non-claims.
 
 ## Validation Snapshot
 - `python3 scripts/validate_canonical_schema.py`: PASS
